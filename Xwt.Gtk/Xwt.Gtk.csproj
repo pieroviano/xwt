@@ -15,7 +15,9 @@
     <LangVersion>6</LangVersion>
     <ConsolePause>False</ConsolePause>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <!-- net10 migration: this is a platform UI backend (binds GTK#); netstandard2.0 is wrong for it.
+         Aligned with xwt/Directory.Build.props (net472 when InMonoDevelopTree). -->
+    <TargetFramework>net472</TargetFramework>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
     <DebugType>full</DebugType>
@@ -28,12 +30,33 @@
     <DebugSymbols>true</DebugSymbols>
   </PropertyGroup>
   <ItemGroup>
-    <Reference Include="gtk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f" />
-    <Reference Include="glib-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f" />
-    <Reference Include="atk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f" />
-    <Reference Include="gdk-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f" />
-    <Reference Include="Mono.Cairo" />
-    <Reference Include="pango-sharp, Version=2.12.0.0, Culture=neutral, PublicKeyToken=35e10195dab3c99f" />
+    <!-- net10 migration: SDK-style projects do not resolve these GAC-style references (MSB3245),
+         which cascaded ~880 GTK errors into MonoDevelop.Ide. Resolve GTK# 2.12 by path instead.
+         Set GtkSharp212Dir (e.g. in Directory.Build.props) if GTK# lives elsewhere. -->
+    <Reference Include="gtk-sharp">
+      <HintPath>$(GtkSharp212Lib)\gtk-sharp.dll</HintPath>
+      <SpecificVersion>False</SpecificVersion>
+    </Reference>
+    <Reference Include="glib-sharp">
+      <HintPath>$(GtkSharp212Lib)\glib-sharp.dll</HintPath>
+      <SpecificVersion>False</SpecificVersion>
+    </Reference>
+    <Reference Include="atk-sharp">
+      <HintPath>$(GtkSharp212Lib)\atk-sharp.dll</HintPath>
+      <SpecificVersion>False</SpecificVersion>
+    </Reference>
+    <Reference Include="gdk-sharp">
+      <HintPath>$(GtkSharp212Lib)\gdk-sharp.dll</HintPath>
+      <SpecificVersion>False</SpecificVersion>
+    </Reference>
+    <Reference Include="Mono.Cairo">
+      <HintPath>$(GtkSharp212Dir)\Mono.Cairo\Mono.Cairo.dll</HintPath>
+      <SpecificVersion>False</SpecificVersion>
+    </Reference>
+    <Reference Include="pango-sharp">
+      <HintPath>$(GtkSharp212Lib)\pango-sharp.dll</HintPath>
+      <SpecificVersion>False</SpecificVersion>
+    </Reference>
   </ItemGroup>
   <ItemGroup>
     <Compile Update="Xwt.GtkBackend\ScrollAdjustmentBackend.cs">

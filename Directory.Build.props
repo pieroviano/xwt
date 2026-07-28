@@ -2,6 +2,10 @@
 
   <PropertyGroup>
     <InMonoDevelopTree Condition="Exists('$(MSBuildThisFileDirectory)..\..\msbuild\MonoDevelop.AfterCommon.props')">true</InMonoDevelopTree>
+    <!-- net10 migration: SDK-style projects do not resolve GAC-style gtk-sharp references (MSB3245).
+         Resolve GTK# 2.12 by path; override GtkSharp212Dir if it is installed elsewhere. -->
+    <GtkSharp212Dir Condition="'$(GtkSharp212Dir)' == ''">C:\Program Files (x86)\GtkSharp\2.12\lib</GtkSharp212Dir>
+    <GtkSharp212Lib>$(GtkSharp212Dir)\gtk-sharp-2.0</GtkSharp212Lib>
     <TargetFrameworkVersion Condition=" '$(InMonoDevelopTree)' == 'true' ">v4.7.2</TargetFrameworkVersion>
     <TargetFrameworks Condition=" '$(InMonoDevelopTree)' == 'true' ">net472</TargetFrameworks>
   </PropertyGroup>
