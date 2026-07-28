@@ -1,12 +1,9 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-
   <PropertyGroup>
     <TargetFrameworks>net40;net472</TargetFrameworks>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
     <SignAssembly>true</SignAssembly>
     <AssemblyOriginatorKeyFile>..\xwt.snk</AssemblyOriginatorKeyFile>
-    <RootNamespace>Xwt.WPF</RootNamespace>
-    <AssemblyName>Xwt.WPF</AssemblyName>
   </PropertyGroup>
   <PropertyGroup Condition=" '$(TargetFramework)' == 'net40'">
     <DefineConstants>DEBUG;NETFRAMEWORK;NET40</DefineConstants>
@@ -74,7 +71,7 @@ This package contains the WPF toolkit backend for Xwt based applications targeti
     <Compile Remove="Xwt.WPFBackend.Utilities\MultiColumnTreeViewItem.cs" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\LICENSE.txt" Pack="true" PackagePath=""/>
-    <None Include="..\README.markdown" Pack="true" PackagePath=""/>
+    <None Include="..\LICENSE.txt" Pack="true" PackagePath="" />
+    <None Include="..\README.markdown" Pack="true" PackagePath="" />
   </ItemGroup>
 </Project>
