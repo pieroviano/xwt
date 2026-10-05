@@ -36,9 +36,8 @@ namespace Xwt.GtkBackend
 		{
 			Widget = new Gtk.Notebook ();
 			Widget.Scrollable = true;
-			Widget.Show ();
 		}
-		
+
 		new Gtk.Notebook Widget {
 			get { return (Gtk.Notebook)base.Widget; }
 			set { base.Widget = value; }
@@ -49,28 +48,38 @@ namespace Xwt.GtkBackend
 			if (eventId is NotebookEvent) {
 				NotebookEvent ev = (NotebookEvent) eventId;
 				if (ev == NotebookEvent.CurrentTabChanged) {
-					Widget.SwitchPage += HandleWidgetSwitchPage;
+					Widget.AddNotification ("page", HandleCurrentPageChanged);
 				}
 			}
 			base.EnableEvent (eventId);
 		}
-		
+
 		public override void DisableEvent (object eventId)
 		{
 			if (eventId is NotebookEvent) {
 				NotebookEvent ev = (NotebookEvent) eventId;
 				if (ev == NotebookEvent.CurrentTabChanged) {
-					Widget.SwitchPage -= HandleWidgetSwitchPage;
+					Widget.RemoveNotification ("page", HandleCurrentPageChanged);
 				}
 			}
 			base.DisableEvent (eventId);
 		}
 
-		void HandleWidgetSwitchPage (object o, Gtk.SwitchPageArgs args)
+		void HandleCurrentPageChanged (object o, GLib.NotifyArgs args)
 		{
-			((INotebookEventSink)EventSink).OnCurrentTabChanged ();
+			// "page" is notified after the switch (switch-page runs before CurrentPage changes)
+			ApplicationContext.InvokeUserCode (((INotebookEventSink)EventSink).OnCurrentTabChanged);
 		}
-		
+
+		/// <summary>The page widget of a child: the child itself or its placement wrapper.</summary>
+		static Gtk.Widget GetPageWidget (IWidgetBackend widget)
+		{
+			var w = GetWidget (widget);
+			if (w != null && w.Parent is WidgetPlacementWrapper)
+				return w.Parent;
+			return w;
+		}
+
 		public void Add (IWidgetBackend widget, NotebookTab tab)
 		{
 			Widget.AppendPage (GetWidgetWithPlacement (widget), CreateLabel (tab));
@@ -78,15 +87,21 @@ namespace Xwt.GtkBackend
 
 		public void Remove (IWidgetBackend widget)
 		{
-			Widget.Remove (GetWidgetWithPlacement (widget));
+			var page = GetPageWidget (widget);
+			int n = page != null ? Widget.PageNum (page) : -1;
+			if (n >= 0)
+				Widget.RemovePage (n);
+			RemoveChildPlacement (page);
 		}
-		
+
 		public void UpdateLabel (NotebookTab tab, string hint)
 		{
 			IWidgetBackend widget = (IWidgetBackend) Toolkit.GetBackend (tab.Child);
-			Widget.SetTabLabel (GetWidget (widget), CreateLabel (tab));
+			var page = GetPageWidget (widget);
+			if (page != null && Widget.PageNum (page) >= 0)
+				Widget.SetTabLabel (page, CreateLabel (tab));
 		}
-		
+
 		public int CurrentTab {
 			get {
 				return Widget.CurrentPage;
@@ -108,13 +123,10 @@ namespace Xwt.GtkBackend
 				Widget.TabPos = tabPos;
 			}
 		}
-		
+
 		Gtk.Widget CreateLabel (NotebookTab tab)
 		{
-			Gtk.Label label = new Gtk.Label (tab.Label);
-			label.Show ();
-			return label;
+			return Gtk.Label.New (tab.Label);
 		}
 	}
 }
-

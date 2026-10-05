@@ -25,24 +25,25 @@
 // THE SOFTWARE.
 using System;
 using Xwt.Backends;
-using Cairo;
 
 namespace Xwt.GtkBackend
 {
 	public class ColorPickerBackend: WidgetBackend, IColorPickerBackend
 	{
+		bool settingColor;
+
 		public ColorPickerBackend ()
 		{
 		}
 
 		public override void Initialize ()
 		{
-			Widget = new Gtk.ColorButton ();
-			base.Widget.Show ();
+			// GTK 4: GtkColorButton is replaced by GtkColorDialogButton + GtkColorDialog
+			Widget = new Gtk.ColorDialogButton (new Gtk.ColorDialog { WithAlpha = false });
 		}
 
-		protected new Gtk.ColorButton Widget {
-			get { return (Gtk.ColorButton)base.Widget; }
+		protected new Gtk.ColorDialogButton Widget {
+			get { return (Gtk.ColorDialogButton)base.Widget; }
 			set { base.Widget = value; }
 		}
 
@@ -52,46 +53,45 @@ namespace Xwt.GtkBackend
 
 		public Xwt.Drawing.Color Color {
 			get {
-				var xwtColor = Widget.Color.ToXwtValue ();
-				return xwtColor.WithAlpha ((double)Widget.Alpha / (double)ushort.MaxValue);
+				return Widget.Rgba.ToXwtValue ();
 			}
 			set {
-				Widget.Color = value.ToGtkValue ();
-				Widget.Alpha = (ushort)((int)(value.Alpha * 255) << 8 | (int)(value.Alpha * 255));
+				// only user choices raise ColorChanged (as GtkColorButton::color-set did)
+				settingColor = true;
+				try {
+					Widget.Rgba = value.ToGtkRgbaValue ();
+				} finally {
+					settingColor = false;
+				}
 			}
 		}
 
 		public bool SupportsAlpha {
 			get {
-				return Widget.UseAlpha;
+				return Widget.Dialog.WithAlpha;
 			}
 			set {
-				Widget.UseAlpha = value;
+				Widget.Dialog.WithAlpha = value;
 			}
 		}
 
 		public string Title {
 			get {
-				return Widget.Title;
+				return Widget.Dialog.Title;
 			}
 			set {
-				Widget.Title = value;
+				Widget.Dialog.Title = value;
 			}
 		}
 
 		public void SetButtonStyle (ButtonStyle style)
 		{
-			switch (style) {
-				case ButtonStyle.Normal:
-					Widget.Relief = Gtk.ReliefStyle.Normal;
-					break;
-				case ButtonStyle.Flat:
-					Widget.Relief = Gtk.ReliefStyle.None;
-					break;
-				case ButtonStyle.Borderless:
-					Widget.Relief = Gtk.ReliefStyle.None;
-					break;
-			}
+			// the visible button is the internal GtkButton child of the GtkColorDialogButton
+			var button = Widget.FirstChild ?? Widget;
+			if (style == ButtonStyle.Normal)
+				button.RemoveCssClass ("flat");
+			else
+				button.AddCssClass ("flat");
 		}
 
 		public override void EnableEvent (object eventId)
@@ -99,7 +99,7 @@ namespace Xwt.GtkBackend
 			base.EnableEvent (eventId);
 			if (eventId is ColorPickerEvent) {
 				switch ((ColorPickerEvent)eventId) {
-					case ColorPickerEvent.ColorChanged: Widget.ColorSet += HandleColorSet; break;
+					case ColorPickerEvent.ColorChanged: Widget.AddNotification ("rgba", HandleColorSet); break;
 				}
 			}
 		}
@@ -109,15 +109,16 @@ namespace Xwt.GtkBackend
 			base.DisableEvent (eventId);
 			if (eventId is ColorPickerEvent) {
 				switch ((ColorPickerEvent)eventId) {
-					case ColorPickerEvent.ColorChanged: Widget.ColorSet -= HandleColorSet; break;
+					case ColorPickerEvent.ColorChanged: Widget.RemoveNotification ("rgba", HandleColorSet); break;
 				}
 			}
 		}
 
-		void HandleColorSet (object sender, EventArgs e)
+		void HandleColorSet (object sender, GLib.NotifyArgs e)
 		{
+			if (settingColor)
+				return;
 			ApplicationContext.InvokeUserCode (EventSink.OnColorChanged);
 		}
 	}
 }
-

@@ -36,29 +36,18 @@ namespace Xwt.GtkBackend
 
 		public void SetContent (object nativeWidget, bool reparent)
 		{
-			if (nativeWidget is Gtk.Widget) {
-				Widget = (Gtk.Widget)nativeWidget;
-				return;
-			}
+			Gtk.Widget gtkWidget = nativeWidget as Gtk.Widget;
+			if (gtkWidget == null && nativeWidget is Xwt.Widget xwtWidget)
+				gtkWidget = GetWidget ((IWidgetBackend)Toolkit.GetBackend (xwtWidget));
 
-			// Check if it is an NSView
-			Type nsView = Type.GetType ("AppKit.NSView, Xamarin.Mac", false);
-			if (nsView != null && nsView.IsInstanceOfType (nativeWidget)) {
-				Widget = GtkMacInterop.NSViewToGtkWidget (nativeWidget);
-				Widget.Show ();
-				return;
-			}
+			// GTK 4 cannot host foreign native views (no NSView or HWND/WPF embedding)
+			if (gtkWidget == null)
+				throw new NotSupportedException ("GTK 4 can only embed Gtk.Widget or Xwt.Widget instances, not " + (nativeWidget?.GetType ().FullName ?? "null"));
 
-			Type frameworkElement = Type.GetType ("System.Windows.FrameworkElement, PresentationFramework, Version=4.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35", false);
-			Type windowsHelper = Type.GetType ("Xwt.Gtk.Windows.GtkWin32Interop, Xwt.Gtk.Windows", false);
-			if (frameworkElement != null && windowsHelper != null && frameworkElement.IsInstanceOfType (nativeWidget)) {
-				var factoryMethod = windowsHelper.GetMethod ("ControlToGtkWidget",
-				                                             System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
-				Widget = (Gtk.Widget)factoryMethod.Invoke (null, new [] { nativeWidget });
-				Widget.Show ();
-				return;
-			}
+			// GTK 4 widgets have a single parent: detach it from its current one when asked to
+			if (reparent && gtkWidget.Parent != null)
+				GtkEngine.RemoveChild (gtkWidget);
+			Widget = gtkWidget;
 		}
 	}
 }
-

@@ -27,34 +27,135 @@
 using System;
 using Xwt.Backends;
 using Xwt.Drawing;
-using System.Collections.Generic;
 
 
 namespace Xwt.GtkBackend
 {
+	/// <summary>
+	/// GTK 4 menus are models: each Xwt menu item is a GLib.MenuItem (rebuilt by the parent
+	/// <see cref="MenuBackend"/> whenever its presentation changes) bound to a GLib.SimpleAction
+	/// named "xwt.item&lt;N&gt;" in the shared <see cref="ActionGroup"/>.
+	/// </summary>
 	public class MenuItemBackend: IMenuItemBackend
 	{
+		/// <summary>Prefix under which <see cref="ActionGroup"/> is installed on widgets.</summary>
+		public const string ActionGroupName = "xwt";
+
+		static int lastItemId;
+		static GLib.SimpleActionGroup actionGroup;
+
+		/// <summary>The action group holding the actions of all the menu items.</summary>
+		public static GLib.SimpleActionGroup ActionGroup {
+			get {
+				if (actionGroup == null)
+					actionGroup = new GLib.SimpleActionGroup ();
+				return actionGroup;
+			}
+		}
+
 		IMenuItemEventSink eventSink;
-		Gtk.MenuItem item;
-		Gtk.Label label;
-		List<MenuItemEvent> enabledEvents;
-		bool changingCheck;
 		ApplicationContext context;
-		
+		readonly string actionName;
+		readonly GLib.SimpleAction action;
+		GLib.SimpleAction submenuAction;
+		bool clickEnabled;
+
+		string label = string.Empty;
+		bool useMnemonic = true;
+		string tooltip;
+		bool sensitive = true;
+		bool visible = true;
+		FormattedText formattedText;
+		GLib.IIcon icon;
+		MenuBackend submenu;
+
 		public MenuItemBackend ()
-			: this (new Gtk.ImageMenuItem (""))
 		{
+			actionName = "item" + (++lastItemId);
+			action = CreateAction (actionName);
+			action.Activated += HandleActivated;
+			ActionGroup.AddAction (action);
 		}
-		
-		public MenuItemBackend (Gtk.MenuItem item)
+
+		/// <summary>Creates the action bound to the item (stateful for check and radio items).</summary>
+		protected virtual GLib.SimpleAction CreateAction (string name)
 		{
-			this.item = item;
-			label = (Gtk.Label) item.Child;
-			item.ShowAll ();
+			return new GLib.SimpleAction (name, null);
 		}
-		
-		public Gtk.MenuItem MenuItem {
-			get { return item; }
+
+		/// <summary>The target value of the item (radio items), or null.</summary>
+		protected virtual GLib.Variant ActionTarget {
+			get { return null; }
+		}
+
+		protected GLib.SimpleAction Action {
+			get { return action; }
+		}
+
+		/// <summary>The action name including the group prefix ("xwt.item&lt;N&gt;").</summary>
+		public string DetailedActionName {
+			get { return ActionGroupName + "." + actionName; }
+		}
+
+		/// <summary>The parent menu (null while the item is not in a menu).</summary>
+		internal MenuBackend ParentMenu { get; set; }
+
+		internal virtual bool IsSeparator {
+			get { return false; }
+		}
+
+		/// <summary>
+		/// A GLib.MenuItem describing the current state of this item. GTK 4: there is no menu item widget;
+		/// the menu model copies the item, so every call returns a new description.
+		/// </summary>
+		public GLib.MenuItem MenuItem {
+			get { return CreateMenuItem (); }
+		}
+
+		internal GLib.MenuItem CreateMenuItem ()
+		{
+			string text;
+			bool markup = formattedText != null;
+			if (markup)
+				text = FormattedTextMarkup.ToMarkup (formattedText, false);
+			else
+				text = label ?? string.Empty;
+			// menu model labels always interpret '_' as a mnemonic
+			if (!useMnemonic)
+				text = text.Replace ("_", "__");
+
+			var item = new GLib.MenuItem (text, (string) null);
+			if (submenu != null) {
+				item.Submenu = submenu.MenuModel;
+				item.SetAttributeValue ("submenu-action", new GLib.Variant (ActionGroupName + "." + SubmenuAction.Name));
+			} else
+				item.SetActionAndTargetValue (DetailedActionName, ActionTarget);
+			if (markup)
+				item.SetAttributeValue ("use-markup", new GLib.Variant (true));
+			if (icon != null)
+				item.Icon = icon;
+			if (!string.IsNullOrEmpty (tooltip))
+				item.SetAttributeValue ("tooltip", new GLib.Variant (tooltip));
+			return item;
+		}
+
+		/// <summary>
+		/// Boolean stateful action GTK uses for submenu items (opened state, sensitivity).
+		/// </summary>
+		GLib.SimpleAction SubmenuAction {
+			get {
+				if (submenuAction == null) {
+					submenuAction = new GLib.SimpleAction (actionName + "-submenu", null, new GLib.Variant (false));
+					submenuAction.Enabled = sensitive;
+					ActionGroup.AddAction (submenuAction);
+				}
+				return submenuAction;
+			}
+		}
+
+		void NotifyChanged ()
+		{
+			ParentMenu?.Rebuild ();
 		}
 
 		public void Initialize (IMenuItemEventSink eventSink)
@@ -62,227 +163,131 @@ namespace Xwt.GtkBackend
 			this.eventSink = eventSink;
 		}
 
-		public void SetSubmenu (IMenuBackend menu)
-		{
-			if (menu == null)
-				item.Submenu = null;
-			else {
-				Gtk.Menu m = ((MenuBackend)menu).Menu;
-				item.Submenu = m;
-			}
-		}
-
-		ImageDescription? defImage, selImage;
-
-		public void SetImage (ImageDescription image)
-		{
-			Gtk.ImageMenuItem it = item as Gtk.ImageMenuItem;
-			if (it == null)
-				return;
-			if (!image.IsNull) {
-				if (defImage == null)
-					item.StateChanged += ImageMenuItemStateChanged;
-				defImage = image;
-				selImage = new ImageDescription {
-					Backend = image.Backend,
-					Size = image.Size,
-					Alpha = image.Alpha,
-					Styles = image.Styles.Add ("sel")
-				};
-				var img = new ImageBox (context, image);
-				img.ShowAll ();
-				it.Image = img;
-				GtkWorkarounds.ForceImageOnMenuItem (it);
-			} else {
-				if (defImage.HasValue) {
-					item.StateChanged -= ImageMenuItemStateChanged;
-					defImage = selImage = null;
-				}
-				it.Image = null;
-			}
-		}
-
-		void ImageMenuItemStateChanged (object o, Gtk.StateChangedArgs args)
-		{
-			var it = item as Gtk.ImageMenuItem;
-			var image = it?.Image as ImageBox;
-			if (image == null || selImage == null || defImage == null)
-				return;
-			if (it.State == Gtk.StateType.Prelight)
-				image.Image = selImage.Value;
-			else if (args.PreviousState == Gtk.StateType.Prelight)
-				image.Image = defImage.Value;
-		}
-
-		public string Label {
-			get {
-				return label != null ? (label.UseUnderline ? label.LabelProp : label.Text) : "";
-			}
-			set {
-				if (formattedText != null) {
-					formattedText = null;
-					label.ApplyFormattedText (null);
-				}
-				if (label.UseUnderline)
-					label.TextWithMnemonic = value;
-				else
-					label.Text = value;
-			}
-		}
-
-		public string TooltipText {
-			get {
-				return item.TooltipText;
-			}
-			set {
-				item.TooltipText = value;
-			}
-		}
-
-		public bool UseMnemonic {
-			get { return label.UseUnderline; }
-			set { label.UseUnderline = value; }
-		}
-		
-		public bool Sensitive {
-			get {
-				return item.Sensitive;
-			}
-			set {
-				item.Sensitive = value;
-			}
-		}
-		
-		public bool Visible {
-			get {
-				return item.Visible;
-			}
-			set {
-				item.Visible = value;
-			}
-		}
-		
-		public bool Checked {
-			get { return (item is Gtk.CheckMenuItem) && ((Gtk.CheckMenuItem)item).Active; }
-			set {
-				if (item is Gtk.CheckMenuItem) {
-					changingCheck = true;
-					((Gtk.CheckMenuItem)item).Active = value;
-					changingCheck = false;
-				}
-			}
-		}
-
-		FormattedText formattedText;
-		public void SetFormattedText (FormattedText text)
-		{
-			label.Text = text?.Text;
-			formattedText = text;
-			label.Realized -= HandleStyleUpdate;
-			label.StyleSet -= HandleStyleUpdate;
-			label.ApplyFormattedText(text);
-			label.Realized += HandleStyleUpdate;
-			label.StyleSet += HandleStyleUpdate;
-
-		}
-
-		void HandleStyleUpdate (object sender, EventArgs e)
-		{
-			// force text update with updated link color
-			if (label.IsRealized && formattedText != null) {
-				label.ApplyFormattedText (formattedText);
-			}
-		}
-
-/*		public void SetType (MenuItemType type)
-		{
-			string text = label.Text;
-			
-			Gtk.MenuItem newItem = null;
-			switch (type) {
-			case MenuItemType.Normal:
-				if (!(item is Gtk.ImageMenuItem))
-					newItem = new Gtk.ImageMenuItem (text);
-				break;
-			case MenuItemType.CheckBox:
-				if (item.GetType () != typeof(Gtk.CheckMenuItem))
-					newItem = new Gtk.CheckMenuItem (text);
-				break;
-			case MenuItemType.RadioButton:
-				if (!(item is Gtk.RadioMenuItem))
-					newItem = new Gtk.RadioMenuItem (text);
-				break;
-			}
-			
-			if (newItem != null) {
-				if ((newItem is Gtk.CheckMenuItem) && (item is Gtk.CheckMenuItem))
-					((Gtk.CheckMenuItem)item).Active = ((Gtk.CheckMenuItem)newItem).Active;
-				newItem.Sensitive = item.Sensitive;
-				if (item.Parent != null) {
-					Gtk.Menu m = (Gtk.Menu)item.Parent;
-					int pos = Array.IndexOf (m.Children, item);
-					m.Insert (newItem, pos);
-					m.Remove (item);
-				}
-				newItem.ShowAll ();
-				if (!item.Visible)
-					newItem.Hide ();
-				
-				if (enabledEvents != null) {
-					foreach (var ob in enabledEvents)
-						DisableEvent (ob);
-				}
-				
-				item = newItem;
-				label = (Gtk.Label) item.Child;
-				
-				if (enabledEvents != null) {
-					foreach (var ob in enabledEvents)
-						EnableEvent (ob);
-				}
-			}
-		}*/
-		
 		public void InitializeBackend (object frontend, ApplicationContext context)
 		{
 			this.context = context;
 		}
 
+		public void SetSubmenu (IMenuBackend menu)
+		{
+			submenu = (MenuBackend)menu;
+			NotifyChanged ();
+		}
+
+		public void SetImage (ImageDescription image)
+		{
+			icon = null;
+			if (!image.IsNull && image.Backend is GtkImage gtkImage) {
+				// GTK 4: menu model icons are GIcons; serialize the rendered image as PNG bytes
+				var idesc = image.WithDefaultSize (Xwt.IconSize.Small);
+				var texture = gtkImage.ToTexture (context, GtkWorkarounds.GetDefaultScaleFactor (), idesc);
+				if (texture != null)
+					icon = new GLib.BytesIcon (texture.SaveToPngBytes ());
+			}
+			NotifyChanged ();
+		}
+
+		public string Label {
+			get {
+				return label;
+			}
+			set {
+				formattedText = null;
+				label = value ?? string.Empty;
+				NotifyChanged ();
+			}
+		}
+
+		public string TooltipText {
+			get {
+				return tooltip;
+			}
+			set {
+				// GTK 4: shown only by toolkits that honour the "tooltip" menu attribute
+				tooltip = value;
+				NotifyChanged ();
+			}
+		}
+
+		public bool UseMnemonic {
+			get { return useMnemonic; }
+			set {
+				useMnemonic = value;
+				NotifyChanged ();
+			}
+		}
+
+		public bool Sensitive {
+			get {
+				return sensitive;
+			}
+			set {
+				sensitive = value;
+				action.Enabled = value;
+				if (submenuAction != null)
+					submenuAction.Enabled = value;
+			}
+		}
+
+		public bool Visible {
+			get {
+				return visible;
+			}
+			set {
+				if (visible == value)
+					return;
+				visible = value;
+				NotifyChanged ();
+			}
+		}
+
+		/// <summary>Checked state of check and radio items (always false for normal items).</summary>
+		public virtual bool Checked {
+			get { return false; }
+			set { }
+		}
+
+		public void SetFormattedText (FormattedText text)
+		{
+			formattedText = text;
+			label = text?.Text ?? string.Empty;
+			NotifyChanged ();
+		}
+
 		public void EnableEvent (object eventId)
 		{
-			if (eventId is MenuItemEvent) {
-				if (enabledEvents == null)
-					enabledEvents = new List<MenuItemEvent> ();
-				enabledEvents.Add ((MenuItemEvent)eventId);
-				if ((MenuItemEvent)eventId == MenuItemEvent.Clicked)
-					item.Activated += HandleItemActivated;
-			}
+			if (eventId is MenuItemEvent && (MenuItemEvent)eventId == MenuItemEvent.Clicked)
+				clickEnabled = true;
 		}
 
 		public void DisableEvent (object eventId)
 		{
-			if (eventId is MenuItemEvent) {
-				enabledEvents.Remove ((MenuItemEvent)eventId);
-				if ((MenuItemEvent)eventId == MenuItemEvent.Clicked)
-					item.Activated -= HandleItemActivated;
-			}
+			if (eventId is MenuItemEvent && (MenuItemEvent)eventId == MenuItemEvent.Clicked)
+				clickEnabled = false;
 		}
 
-		void HandleItemActivated (object sender, EventArgs e)
+		void HandleActivated (object sender, GLib.ActivatedArgs args)
 		{
-			if (!changingCheck) {
+			OnActivated (args.Parameter);
+			if (clickEnabled && eventSink != null)
 				context.InvokeUserCode (eventSink.OnClicked);
-			}
+		}
+
+		/// <summary>Updates the action state on activation (check and radio items).</summary>
+		protected virtual void OnActivated (GLib.Variant parameter)
+		{
 		}
 
 		public void Dispose ()
 		{
-			if (label != null) {
-				label.Realized -= HandleStyleUpdate;
-				label.StyleSet -= HandleStyleUpdate;
-				label = null;
+			if (actionGroup != null) {
+				actionGroup.RemoveAction (actionName);
+				if (submenuAction != null)
+					actionGroup.RemoveAction (submenuAction.Name);
 			}
+			action.Activated -= HandleActivated;
+			submenuAction = null;
+			submenu = null;
 		}
 	}
 }
-

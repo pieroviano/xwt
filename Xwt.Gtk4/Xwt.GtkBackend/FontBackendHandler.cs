@@ -30,6 +30,7 @@ using Xwt.Drawing;
 using System.Globalization;
 using System.Collections.Generic;
 using System.Linq;
+using System;
 
 namespace Xwt.GtkBackend
 {
@@ -39,13 +40,24 @@ namespace Xwt.GtkBackend
 
 		static GtkFontBackendHandler ()
 		{
-			systemContext = Gdk.PangoHelper.ContextGet ();
+			systemContext = CreateSystemContext ();
+		}
+
+		/// <summary>
+		/// A Pango context on the default PangoCairo font map (the one GTK 4 widgets use).
+		/// </summary>
+		static Pango.Context CreateSystemContext ()
+		{
+			using (var sf = new Cairo.ImageSurface (Cairo.Format.Argb32, 1, 1))
+			using (var cr = new Cairo.Context (sf))
+				return Pango.CairoHelper.CreateContext (cr);
 		}
 
 		public override object GetSystemDefaultFont ()
 		{
-			var style = Gtk.Rc.GetStyleByPaths (Gtk.Settings.Default, null, null, Gtk.Label.GType);
-			return style.FontDescription;
+			// GTK 4: no Gtk.Rc styles; the default UI font is the gtk-font-name setting
+			var name = Gtk.Settings.Default?.GtkFontName;
+			return FontDescription.FromString (string.IsNullOrEmpty (name) ? "Sans 10" : name);
 		}
 
 		public override IEnumerable<string> GetInstalledFonts ()
@@ -77,26 +89,24 @@ namespace Xwt.GtkBackend
 			return result;
 		}
 
-		[System.Runtime.InteropServices.DllImport (GtkInterop.LIBFONTCONFIG)]
-		static extern bool FcConfigAppFontAddFile (System.IntPtr config, string fontPath);
-
-		[System.Runtime.InteropServices.DllImport (GtkInterop.LIBPANGOCAIRO)]
-		static extern void pango_cairo_font_map_set_default (System.IntPtr fontmap);
-
 		public override bool RegisterFontFromFile (string fontPath)
 		{
 			var result = AddFontFile (fontPath);
-			if (result) {
-				pango_cairo_font_map_set_default (System.IntPtr.Zero);
-				systemContext = Gdk.PangoHelper.ContextGet ();
-			}
+			if (result)
+				systemContext.FontMap.Changed ();
 			return result;
 		}
 
 		protected virtual bool AddFontFile (string fontPath)
 		{
-			// Try to add font file to the current fontconfig configuration
-			return FcConfigAppFontAddFile (System.IntPtr.Zero, fontPath);
+			// Adds the font file to the default font map (pango_font_map_add_font_file, Pango >= 1.56),
+			// which replaces the fontconfig-specific FcConfigAppFontAddFile registration.
+			try {
+				return systemContext.FontMap.AddFontFile (fontPath);
+			} catch (Exception) {
+				// GError, or the symbol is missing in an older Pango
+				return false;
+			}
 		}
 
 		#region IFontBackendHandler implementation

@@ -24,12 +24,13 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 
+
 using System;
 using Xwt.Backends;
 using Gtk;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
-using Gdk;
 using TreeModel = Gtk.ITreeModel;
 
 namespace Xwt.GtkBackend
@@ -37,6 +38,8 @@ namespace Xwt.GtkBackend
 	public class TableViewBackend: WidgetBackend, ICellRendererTarget
 	{
 		Dictionary<CellView,CellInfo> cellViews = new Dictionary<CellView, CellInfo> ();
+		Gtk.CssProvider backgroundProvider;
+		bool alternatingRowColors;
 
 		class CellInfo {
 			public CellViewBackend Renderer;
@@ -45,33 +48,35 @@ namespace Xwt.GtkBackend
 
 		protected override void OnSetBackgroundColor (Xwt.Drawing.Color color)
 		{
-			// Gtk3 workaround (by rpc-scandinavia, see https://github.com/mono/xwt/pull/411)
-			var selectedColor = Widget.GetBackgroundColor(StateType.Selected);
-			Widget.SetBackgroundColor (StateType.Normal, Xwt.Drawing.Colors.Transparent);
-			Widget.SetBackgroundColor (StateType.Selected, selectedColor);
 			base.OnSetBackgroundColor (color);
+			// The tree view paints its own background, also for selected rows: only the
+			// unselected rows take the custom color so the theme's selection stays visible.
+			if (backgroundProvider == null) {
+				backgroundProvider = new Gtk.CssProvider ();
+				Widget.AddCssClass ("xwt-table-view");
+				Widget.StyleContext.AddProvider (backgroundProvider, Gtk.StyleProviderPriority.Application + 10);
+			}
+			backgroundProvider.LoadFromString ("treeview.view.xwt-table-view:not(:selected) { background-image: none; background-color: " + color.ToCssValue () + "; }");
 		}
 
 		public TableViewBackend ()
 		{
 			var sw = new Gtk.ScrolledWindow ();
-			sw.ShadowType = Gtk.ShadowType.In;
+			sw.HasFrame = true;
 			sw.Child = new CustomTreeView (this);
-			sw.Child.Show ();
-			sw.Show ();
 			base.Widget = sw;
 
 			Widget.EnableSearch = false;
 		}
-		
+
 		protected new Gtk.TreeView Widget {
 			get { return (Gtk.TreeView)ScrolledWindow.Child; }
 		}
-		
+
 		protected Gtk.ScrolledWindow ScrolledWindow {
 			get { return (Gtk.ScrolledWindow)base.Widget; }
 		}
-		
+
 		protected new ITableViewEventSink EventSink {
 			get { return (ITableViewEventSink)base.EventSink; }
 		}
@@ -90,7 +95,7 @@ namespace Xwt.GtkBackend
 				ScrolledWindow.VscrollbarPolicy = value.ToGtkValue ();
 			}
 		}
-		
+
 		public ScrollPolicy HorizontalScrollPolicy {
 			get {
 				return ScrolledWindow.HscrollbarPolicy.ToXwtValue ();
@@ -104,6 +109,17 @@ namespace Xwt.GtkBackend
 		{
 			get { return Widget.EnableGridLines.ToXwtValue (); }
 			set { Widget.EnableGridLines = value.ToGtkValue (); }
+		}
+
+		/// <summary>
+		/// GTK 4 dropped the tree view "rules hint": odd rows get a tinted cell background instead.
+		/// </summary>
+		protected bool AlternatingRowColors {
+			get { return alternatingRowColors; }
+			set {
+				alternatingRowColors = value;
+				Widget.QueueDraw ();
+			}
 		}
 
 		public IScrollControlBackend CreateVerticalScrollControl ()
@@ -124,7 +140,7 @@ namespace Xwt.GtkBackend
 					Widget.Selection.Changed += HandleWidgetSelectionChanged;
 			}
 		}
-		
+
 		public override void DisableEvent (object eventId)
 		{
 			base.DisableEvent (eventId);
@@ -134,11 +150,11 @@ namespace Xwt.GtkBackend
 			}
 		}
 
-		void HandleWidgetSelectionChanged (object sender, EventArgs e)
+		void HandleWidgetSelectionChanged (object sender, System.EventArgs e)
 		{
 			ApplicationContext.InvokeUserCode (EventSink.OnSelectionChanged);
 		}
-		
+
 		public object AddColumn (ListViewColumn col)
 		{
 			Gtk.TreeViewColumn tc = new Gtk.TreeViewColumn ();
@@ -155,17 +171,15 @@ namespace Xwt.GtkBackend
 			MapColumn (col, tc);
 			return tc;
 		}
-		
+
 		void MapTitle (ListViewColumn col, Gtk.TreeViewColumn tc)
 		{
 			if (col.HeaderView == null)
 				tc.Title = col.Title;
-			else {
+			else
 				tc.Widget = CellUtil.CreateCellRenderer (ApplicationContext, col.HeaderView);
-				tc.Widget?.Show ();
-			}
 		}
-		
+
 		void MapColumn (ListViewColumn col, Gtk.TreeViewColumn tc)
 		{
 			foreach (var k in cellViews.Where (e => e.Value.Column == tc).Select (e => e.Key).ToArray ())
@@ -178,7 +192,7 @@ namespace Xwt.GtkBackend
 				};
 			}
 		}
-		
+
 		public void RemoveColumn (ListViewColumn col, object handle)
 		{
 			Widget.RemoveColumn ((Gtk.TreeViewColumn)handle);
@@ -228,7 +242,7 @@ namespace Xwt.GtkBackend
 		{
 			Widget.Selection.SelectAll ();
 		}
-		
+
 		public void UnselectAll ()
 		{
 			Widget.Selection.UnselectAll ();
@@ -266,7 +280,7 @@ namespace Xwt.GtkBackend
 		{
 			((Gtk.TreeViewColumn)target).PackEnd (cr, expand);
 		}
-		
+
 		public void AddAttribute (object target, Gtk.CellRenderer cr, string field, int col)
 		{
 			((Gtk.TreeViewColumn)target).AddAttribute (cr, field, col);
@@ -275,6 +289,28 @@ namespace Xwt.GtkBackend
 		public void SetCellDataFunc (object target, Gtk.CellRenderer cr, Gtk.CellLayoutDataFunc dataFunc)
 		{
 			((Gtk.TreeViewColumn)target).SetCellDataFunc (cr, dataFunc);
+		}
+
+		void ICellRendererTarget.OnCellDataLoaded (object target, Gtk.CellRenderer cr, Gtk.TreeIter iter)
+		{
+			if (!alternatingRowColors) {
+				if (cr.CellBackgroundSet)
+					cr.CellBackgroundSet = false;
+				return;
+			}
+			// Row parity from the row's offset in the whole tree (tree coordinates do not scroll).
+			// GTK only paints the cell background of unselected cells.
+			var path = Widget.Model.GetPath (iter);
+			var area = Widget.GetBackgroundArea (path, (Gtk.TreeViewColumn)target);
+			int tx, ty;
+			Widget.ConvertBinWindowToTreeCoords (area.X, area.Y, out tx, out ty);
+			bool odd = area.Height > 0 && ((ty + area.Height / 2) / area.Height) % 2 == 1;
+			if (odd) {
+				var color = Widget.StyleColor;
+				color.Alpha = 0.06f;
+				cr.CellBackgroundRgba = color;
+			} else if (cr.CellBackgroundSet)
+				cr.CellBackgroundSet = false;
 		}
 
 		Rectangle ICellRendererTarget.GetCellBounds (object target, Gtk.CellRenderer cra, Gtk.TreeIter iter)
@@ -297,7 +333,7 @@ namespace Xwt.GtkBackend
 					col.CellGetPosition (cr, out position_x, out width);
 
 					if (i == renderers.Length - 1) {
-						// Gtk3 allocates all available space to the last cell in the column
+						// the last cell in the column gets all the remaining space
 						width = column_cell_area.Width - position_x;
 					} else {
 						int position_x_next, width_next;
@@ -397,32 +433,8 @@ namespace Xwt.GtkBackend
 			return null;
 		}
 
-		protected override ButtonEventArgs GetButtonPressEventArgs (ButtonPressEventArgs args)
-		{
-			int x, y;
-			Widget.ConvertBinWindowToWidgetCoords ((int)args.Event.X, (int)args.Event.Y, out x, out y);
-			var xwt_args = base.GetButtonPressEventArgs (args);
-			xwt_args.X = x;
-			xwt_args.Y = y;
-			return xwt_args;
-		}
-
-		protected override ButtonEventArgs GetButtonReleaseEventArgs (ButtonReleaseEventArgs args)
-		{
-			int x, y;
-			Widget.ConvertBinWindowToWidgetCoords ((int)args.Event.X, (int)args.Event.Y, out x, out y);
-			var xwt_args = base.GetButtonReleaseEventArgs (args);
-			xwt_args.X = x;
-			xwt_args.Y = y;
-			return xwt_args;
-		}
-
-		protected override MouseMovedEventArgs GetMouseMovedEventArgs (MotionNotifyEventArgs args)
-		{
-			int x, y;
-			Widget.ConvertBinWindowToWidgetCoords ((int)args.Event.X, (int)args.Event.Y, out x, out y);
-			return new MouseMovedEventArgs ((long) args.Event.Time, x, y);
-		}
+		// GTK 4: the event controllers report positions relative to the tree view (EventsRootWidget),
+		// which already are the widget coordinates Xwt expects; no bin window conversion is needed.
 
 		public virtual void SetCurrentEventRow (string path)
 		{
@@ -440,7 +452,10 @@ namespace Xwt.GtkBackend
 
 		CellViewBackend ICellRendererTarget.PressedCell { get; set; }
 
-
+		/// <summary>
+		/// Finds the row at (ex, ey), in tree view widget coordinates, if the point is inside
+		/// renderer r. cx/cy return the same point (widget coordinates).
+		/// </summary>
 		public bool GetCellPosition (Gtk.CellRenderer r, int ex, int ey, out int cx, out int cy, out Gtk.TreeIter it)
 		{
 			Gtk.TreeViewColumn col;
@@ -449,14 +464,17 @@ namespace Xwt.GtkBackend
 			cx = cy = 0;
 			it = Gtk.TreeIter.Zero;
 
-			if (!Widget.GetPathAtPos (ex, ey, out path, out col, out _cellx, out _celly))
+			int bx, by;
+			Widget.ConvertWidgetToBinWindowCoords (ex, ey, out bx, out by);
+
+			if (!Widget.GetPathAtPos (bx, by, out path, out col, out _cellx, out _celly))
 				return false;
 
 			if (!Widget.Model.GetIter (out it, path))
 				return false;
 
 			var cellArea = Widget.GetCellArea (path, col);
-			var cellx = ex - cellArea.X;
+			var cellx = bx - cellArea.X;
 
 			var renderers = col.GetCellRenderers ();
 			int i = Array.IndexOf (renderers, r);
@@ -473,9 +491,10 @@ namespace Xwt.GtkBackend
 					// Last renderer of the column. Its width is what's left in the cell area.
 					rendererWidth = cellArea.Width - rendererX;
 				}
-				
+
 				if (cellx >= rendererX && cellx < rendererX + rendererWidth) {
-					Widget.ConvertBinWindowToWidgetCoords (ex, ey, out cx, out cy);
+					cx = ex;
+					cy = ey;
 					return true;
 				}
 			}
@@ -484,11 +503,8 @@ namespace Xwt.GtkBackend
 
 		public void QueueDraw (object target, Gtk.TreeIter iter)
 		{
-			var p = Widget.Model.GetPath (iter);
-			var r = Widget.GetBackgroundArea (p, (Gtk.TreeViewColumn)target);
-			int x, y;
-			Widget.ConvertBinWindowToWidgetCoords (r.X, r.Y, out x, out y);
-			Widget.QueueDrawArea (x, y, r.Width, r.Height);
+			// GTK 4 redraws whole widgets (no partial invalidation)
+			Widget.QueueDraw ();
 		}
 
 		public void QueueResize (object target, Gtk.TreeIter iter)
@@ -498,75 +514,119 @@ namespace Xwt.GtkBackend
 		}
 
 		#endregion
+
+		protected override void Dispose (bool disposing)
+		{
+			if (disposing && backgroundProvider != null) {
+				Widget.StyleContext.RemoveProvider (backgroundProvider);
+				backgroundProvider = null;
+			}
+			base.Dispose (disposing);
+		}
 	}
-	
+
 	class CustomTreeView: Gtk.TreeView
 	{
-		WidgetBackend backend;
 		TreePath delayedSelection;
 		TreeViewColumn delayedSelectionColumn;
+		bool restoreSelectFunction;
+		bool plainBackspace;
 
 		public CustomTreeView (WidgetBackend b)
 		{
-			backend = b;
-			base.DragBegin += (_, __) =>
-				delayedSelection = null;
+			// GTK 4: the button press/release vfuncs are gone. A capture-phase legacy controller
+			// sees the events before the tree view's own click gesture.
+			var buttons = new Gtk.EventControllerLegacy ();
+			buttons.PropagationPhase = Gtk.PropagationPhase.Capture;
+			LegacyEvents.Connect (buttons, HandleButtonEvent);
+			AddController (buttons);
+
+			if (Platform.IsMac) {
+				// On Mac we want to be able to handle the backspace key (labeled "delete") in a custom way
+				// through a normal keypressed event but a default binding maps it to "select-cursor-parent".
+				// That action is also bound to Ctrl+Backspace, so the plain Backspace binding is disabled:
+				// the signal is stopped and reports "not handled", and the key event keeps propagating.
+				var keys = new Gtk.EventControllerKey ();
+				keys.PropagationPhase = Gtk.PropagationPhase.Capture;
+				keys.KeyPressed += (o, args) =>
+					plainBackspace = (Gdk.Key)args.Keyval == Gdk.Key.BackSpace && (args.State & (Gdk.ModifierType.ShiftMask | Gdk.ModifierType.ControlMask | Gdk.ModifierType.AltMask | Gdk.ModifierType.SuperMask | Gdk.ModifierType.HyperMask | Gdk.ModifierType.MetaMask)) == 0;
+				AddController (keys);
+				SelectCursorParent += HandleSelectCursorParent;
+			}
 		}
 
-		static CustomTreeView ()
+		[GLib.ConnectBefore]
+		void HandleSelectCursorParent (object o, SelectCursorParentArgs args)
 		{
-			// On Mac we want to be able to handle the backspace key (labeled "delete") in a custom way
-			// through a normal keypressed event but a default binding prevents this from happening because
-			// it maps it to "select-cursor-parent". However, that event is also bound to Ctrl+Backspace anyway
-			// so we can just kill one of those binding
-			if (Platform.IsMac)
-				GtkWorkarounds.RemoveKeyBindingFromClass (Gtk.TreeView.GType, Gdk.Key.BackSpace, Gdk.ModifierType.None);
+			if (!plainBackspace)
+				return;
+			plainBackspace = false;
+			this.StopSignal ("select-cursor-parent");
+			args.RetVal = false;
 		}
 
-		protected override bool OnButtonPressEvent (EventButton evnt)
+		bool HandleButtonEvent (Gdk.Event evnt)
 		{
-			if (Selection.Mode == Gtk.SelectionMode.Multiple) {
-				// If we are clicking on already selected row, delay the selection until we are certain that
-				// the user is not starting a DragDrop operation. 
-				// This is needed to allow user to drag multiple selected rows.
-				TreePath treePath;
-				TreeViewColumn column;
-				GetPathAtPos ((int)evnt.X, (int)evnt.Y, out treePath, out column);
+			if (evnt.EventType == Gdk.EventType.ButtonPress)
+				OnButtonPress (evnt);
+			else if (evnt.EventType == Gdk.EventType.ButtonRelease)
+				OnButtonRelease ();
+			return false;
+		}
 
-				var ctrlShiftMask = (evnt.State & (Gdk.ModifierType.ShiftMask | Gdk.ModifierType.ControlMask | Gdk.ModifierType.Mod2Mask));
-				if (treePath != null && evnt.Button == 1 && this.Selection.PathIsSelected (treePath) && this.Selection.CountSelectedRows() > 1 && ctrlShiftMask == 0) {
-					delayedSelection = treePath;
-					delayedSelectionColumn = column;
-					Selection.SelectFunction = (_, __, ___, ____) => false;
-					var result = false;
-					try {
-						result = base.OnButtonPressEvent (evnt);
-					} finally {
+		void OnButtonPress (Gdk.Event evnt)
+		{
+			delayedSelection = null;
+			delayedSelectionColumn = null;
+			if (Selection.Mode != Gtk.SelectionMode.Multiple)
+				return;
+
+			// If we are clicking on already selected row, delay the selection until we are certain that
+			// the user is not starting a DragDrop operation.
+			// This is needed to allow user to drag multiple selected rows.
+			double ex, ey, wx, wy, sx, sy;
+			var nativeWidget = this.GetNativeWidget ();
+			if (Native == null || nativeWidget == null || !evnt.GetPosition (out ex, out ey))
+				return;
+			Native.GetSurfaceTransform (out sx, out sy);
+			if (!nativeWidget.TranslateCoordinates (this, ex - sx, ey - sy, out wx, out wy))
+				return;
+			int bx, by;
+			ConvertWidgetToBinWindowCoords ((int)wx, (int)wy, out bx, out by);
+
+			TreePath treePath;
+			TreeViewColumn column;
+			GetPathAtPos (bx, by, out treePath, out column);
+
+			var button = new Gdk.ButtonEvent (evnt.Handle).Button;
+			var ctrlShiftMask = (evnt.ModifierState & (Gdk.ModifierType.ShiftMask | Gdk.ModifierType.ControlMask));
+			if (treePath != null && button == 1 && Selection.PathIsSelected (treePath) && Selection.CountSelectedRows () > 1 && ctrlShiftMask == 0) {
+				delayedSelection = treePath;
+				delayedSelectionColumn = column;
+				// the tree view handles the press after this controller: block selection changes
+				// until the event has been dispatched
+				Selection.SelectFunction = (_, __, ___, ____) => false;
+				if (!restoreSelectFunction) {
+					restoreSelectFunction = true;
+					GLib.Idle.Add (delegate {
+						restoreSelectFunction = false;
 						Selection.SelectFunction = (_, __, ___, ____) => true;
-					}
-					return result;
+						return false;
+					});
 				}
 			}
-			return base.OnButtonPressEvent (evnt);
 		}
 
-		protected override bool OnButtonReleaseEvent (EventButton evnt)
+		void OnButtonRelease ()
 		{
 			// Now, if mouse hadn't moved, we are certain that this was just a click. Proceed as usual.
+			// (When a drag starts the release goes to the drag, not to the tree view.)
 			if (delayedSelection != null) {
+				Selection.SelectFunction = (_, __, ___, ____) => true;
 				SetCursor (delayedSelection, delayedSelectionColumn, false);
 				delayedSelection = null;
 				delayedSelectionColumn = null;
 			}
-			return base.OnButtonReleaseEvent (evnt);
-		}
-
-		protected override void OnDragDataDelete (Gdk.DragContext context)
-		{
-			// This method is override to avoid the default implementation
-			// being called. The default implementation deletes the
-			// row being dragged, and we don't want that
-			backend.DoDragaDataDelete ();
 		}
 	}
 }

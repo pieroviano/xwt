@@ -234,6 +234,44 @@ namespace Xwt.GtkBackend
 		}
 	}
 
+	/// <summary>
+	/// "event" signal of Gtk.EventControllerLegacy, which the GtkSharp4 package does not bind
+	/// (the controller is exposed without its signal).
+	/// </summary>
+	internal static class LegacyEvents
+	{
+		/// <summary>Returns true when the event has been handled (stops its propagation).</summary>
+		public delegate bool Handler (Gdk.Event evt);
+
+		[UnmanagedFunctionPointer (CallingConvention.Cdecl)]
+		delegate bool EventSignalDelegate (IntPtr controller, IntPtr evt, IntPtr gch);
+
+		static readonly EventSignalDelegate eventCallback = EventCallback;
+
+		static bool EventCallback (IntPtr controller, IntPtr evt, IntPtr gch)
+		{
+			try {
+				var sig = ((GCHandle) gch).Target as GLib.Signal;
+				var handler = sig?.Handler as Handler;
+				// the event is borrowed: the wrapper does not own (nor unref) it
+				return handler != null && evt != IntPtr.Zero && handler (new Gdk.Event (evt));
+			} catch (Exception e) {
+				GLib.ExceptionManager.RaiseUnhandledException (e, false);
+				return false;
+			}
+		}
+
+		public static void Connect (Gtk.EventControllerLegacy controller, Handler handler)
+		{
+			controller.AddSignalHandler ("event", handler, eventCallback);
+		}
+
+		public static void Disconnect (Gtk.EventControllerLegacy controller, Handler handler)
+		{
+			controller.RemoveSignalHandler ("event", handler);
+		}
+	}
+
 	public class TextIndexer
 	{
 		static readonly List<int> emptyList = new List<int> ();

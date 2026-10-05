@@ -23,7 +23,6 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-
 using System;
 using System.Linq;
 
@@ -31,32 +30,28 @@ namespace Xwt.GtkBackend
 {
 	public class GtkMacInterop
 	{
-		const string LibGdk = "libgdk-quartz-2.0.dylib";
-		const string LibGtk = "libgtk-quartz-2.0";
-		
-		[System.Runtime.InteropServices.DllImport (LibGtk)]
-		extern static IntPtr gtk_ns_view_new (IntPtr nsview);
-		
+		/// <summary>
+		/// GTK 4: embedding an NSView in a GTK widget is not possible (GtkNSView was a GTK 2 quartz
+		/// widget and the GTK 4 macOS backend exposes no equivalent).
+		/// </summary>
 		public static Gtk.Widget NSViewToGtkWidget (object view)
 		{
-			var prop = view.GetType ().GetProperty ("Handle");
-			var handle = prop.GetValue (view, null);
-			return new Gtk.Widget (gtk_ns_view_new ((IntPtr)handle));
+			throw new NotSupportedException ("Embedding an NSView is not supported by GTK 4");
 		}
 
+		/// <summary>Finds the GTK window whose native handle is the Handle of <paramref name="window"/>.</summary>
 		public static Gtk.Window GetGtkWindow (object window)
 		{
 			if (window == null)
 				return null;
-			
+
 			var prop = window.GetType ().GetProperty ("Handle");
-			var handle = prop.GetValue (window, null);
+			var handle = prop?.GetValue (window, null);
 			if (handle is IntPtr) {
 				var toplevels = Gtk.Window.ListToplevels ();
-				return toplevels.FirstOrDefault (w => w.IsRealized && GtkWorkarounds.GetGtkWindowNativeHandle (w) == (IntPtr)handle);
+				return toplevels.FirstOrDefault (w => w.Surface != null && GtkWorkarounds.GetGtkWindowNativeHandle (w) == (IntPtr)handle);
 			}
 			return null;
 		}
 	}
 }
-

@@ -25,7 +25,6 @@
 // THE SOFTWARE.
 using System;
 using Xwt.Backends;
-using System.Runtime.InteropServices;
 using Xwt.GtkBackend.WebKit;
 
 namespace Xwt.GtkBackend
@@ -33,6 +32,7 @@ namespace Xwt.GtkBackend
 	public class WebViewBackend : WidgetBackend, IWebViewBackend
 	{
 		WebKit.WebView view;
+		bool scrollBarsEnabled = true;
 
 		public WebViewBackend ()
 		{
@@ -40,43 +40,49 @@ namespace Xwt.GtkBackend
 
 		public override void Initialize()
 		{
-			NeedsEventBox = false;
 			base.Initialize ();
 
-			view = new WebKit.WebView ();
-			view.ContextMenu += HandleContextMenuRequest;
-			Widget = view;
-			Widget.Show ();
+			if (WebKit.WebView.IsAvailable) {
+				view = new WebKit.WebView ();
+				view.ContextMenu += HandleContextMenuRequest;
+				Widget = view;
+			} else {
+				// GTK 4: the web view needs the WebKitGTK 6.0 runtime; without it show a placeholder
+				Widget = new Gtk.Label ("Web view not available") {
+					Hexpand = true,
+					Vexpand = true,
+				};
+			}
 		}
 
 		public string Url {
-			get { return view.Uri; }
+			get { return view?.Uri; }
 			set {
-				view.LoadUri (value);
+				view?.LoadUri (value);
 			}
 		}
 
 		public string Title {
 			get {
-				return view.Title;
+				return view?.Title;
 			}
 		}
 
 		public double LoadProgress {
 			get {
-				return view.LoadProgress;
+				return view != null ? view.LoadProgress : 0;
 			}
 		}
 
 		public bool CanGoBack {
 			get {
-				return view.CanGoBack ();
+				return view != null && view.CanGoBack ();
 			}
 		}
 
 		public bool CanGoForward {
 			get {
-				return view.CanGoForward ();
+				return view != null && view.CanGoForward ();
 			}
 		}
 
@@ -84,19 +90,24 @@ namespace Xwt.GtkBackend
 
 		public bool DrawsBackground {
 			get {
-				return !view.Transparent;
+				return view == null || !view.Transparent;
 			}
 			set {
-				view.Transparent = !value;
+				if (view != null)
+					view.Transparent = !value;
 			}
 		}
 
+		/// <summary>
+		/// GTK 4: a WebKitGTK 6 view always scrolls its own content (it is not a GtkScrollable);
+		/// the value is kept but has no effect.
+		/// </summary>
 		public bool ScrollBarsEnabled {
 			get {
-				return view.SelfScrolling;
+				return scrollBarsEnabled;
 			}
 			set {
-				view.SelfScrolling = value;
+				scrollBarsEnabled = value;
 			}
 		}
 
@@ -104,27 +115,27 @@ namespace Xwt.GtkBackend
 
 		public void GoBack ()
 		{
-			view.GoBack ();
+			view?.GoBack ();
 		}
 
 		public void GoForward ()
 		{
-			view.GoForward ();
+			view?.GoForward ();
 		}
 
 		public void Reload ()
 		{
-			view.Reload ();
+			view?.Reload ();
 		}
 
 		public void StopLoading ()
 		{
-			view.StopLoading ();
+			view?.StopLoading ();
 		}
 
 		public void LoadHtml (string content, string base_uri)
 		{
-			view.LoadHtmlString (content, base_uri);
+			view?.LoadHtmlString (content, base_uri);
 		}
 
 		protected new IWebViewEventSink EventSink {
@@ -134,7 +145,7 @@ namespace Xwt.GtkBackend
 		public override void EnableEvent (object eventId)
 		{
 			base.EnableEvent (eventId);
-			if (eventId is WebViewEvent) {
+			if (view != null && eventId is WebViewEvent) {
 				switch ((WebViewEvent)eventId) {
 					case WebViewEvent.NavigateToUrl: view.NavigationRequested += HandleNavigationRequested; break;
 					case WebViewEvent.Loading: view.LoadStarted += HandleLoadStarted; break;
@@ -147,7 +158,7 @@ namespace Xwt.GtkBackend
 		public override void DisableEvent (object eventId)
 		{
 			base.DisableEvent (eventId);
-			if (eventId is WebViewEvent) {
+			if (view != null && eventId is WebViewEvent) {
 				switch ((WebViewEvent)eventId) {
 					case WebViewEvent.NavigateToUrl: view.NavigationRequested -= HandleNavigationRequested; break;
 					case WebViewEvent.Loading: view.LoadStarted -= HandleLoadStarted; break;
@@ -186,4 +197,3 @@ namespace Xwt.GtkBackend
 		}
 	}
 }
-

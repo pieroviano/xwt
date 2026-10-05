@@ -25,22 +25,25 @@
 // THE SOFTWARE.
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using Xwt.Accessibility;
 using Xwt.Backends;
 
-using AtkComponent = Atk.IComponent;
-using AtkValue = Atk.IValue;
-using AtkText = Atk.IText;
-using AtkEditableText = Atk.IEditableText;
-
 namespace Xwt.GtkBackend
 {
+	/// <summary>
+	/// Xwt accessibility on top of the GTK 4 GtkAccessible interface (ATK is gone).
+	/// GTK 4 has no getters for accessible properties, so the values set through Xwt are
+	/// cached here and pushed to GTK with gtk_accessible_update_property/relation.
+	/// </summary>
 	public class AccessibleBackend : IAccessibleBackend
 	{
 		protected Gtk.Widget widget;
 		IAccessibleEventSink eventSink;
 		ApplicationContext context;
+
+		string description, label, identifier, roleDescription, value;
 
 		public virtual event EventHandler AccessibilityInUseChanged;
 		protected virtual void OnAccessibilityInUseChanged (object sender, EventArgs eventArgs)
@@ -60,12 +63,8 @@ namespace Xwt.GtkBackend
 		public void Initialize (IWidgetBackend parentWidget, IAccessibleEventSink eventSink)
 		{
 			var backend = parentWidget as WidgetBackend;
-			if (Platform.IsMac && backend is IComboBoxEntryBackend) {
-				// Gtk.ComboBoxEntry a11y doesn't work with Gtk/AtkCocoa.
-				// Workaround: Set a11y properties to its Gtk.Entry
-				Initialize ((backend?.Widget as Gtk.Bin)?.Child, eventSink);
-			} else if (backend is TableViewBackend && backend.Widget is Gtk.ScrolledWindow) {
-				// due to special Gtk.TreeView scrolling behaviour we need to apply a11y preferences to the tree
+			if (backend is TableViewBackend && backend.Widget is Gtk.ScrolledWindow) {
+				// the accessible information belongs to the tree, not to its scrolled window
 				Initialize ((backend.Widget as Gtk.ScrolledWindow)?.Child, eventSink);
 			} else
 				Initialize (backend?.Widget, eventSink);
@@ -74,18 +73,20 @@ namespace Xwt.GtkBackend
 		public void Initialize (IPopoverBackend parentPopover, IAccessibleEventSink eventSink)
 		{
 			// Not currently supported
+			this.eventSink = eventSink;
 		}
 
-		public void Initialize(IMenuBackend parentMenu, IAccessibleEventSink eventSync)
+		public void Initialize (IMenuBackend parentMenu, IAccessibleEventSink eventSink)
 		{
-			var menuBackend = parentMenu as MenuBackend;
-			Initialize(menuBackend?.Menu, eventSink);
+			this.eventSink = eventSink;
+			// GTK 4: a menu is rendered by a GtkPopoverMenu; annotate it when the backend exposes one
+			widget = (object)(parentMenu as MenuBackend)?.Menu as Gtk.Widget;
 		}
 
 		public void Initialize (IMenuItemBackend parentMenuItem, IAccessibleEventSink eventSink)
 		{
-			var menuItemBackend = parentMenuItem as MenuItemBackend;
-			Initialize (menuItemBackend?.MenuItem, eventSink);
+			// GTK 4: menu items are GMenuItem data, not accessibles: the properties are only stored.
+			this.eventSink = eventSink;
 		}
 
 		public void Initialize (object parentWidget, IAccessibleEventSink eventSink)
@@ -101,88 +102,131 @@ namespace Xwt.GtkBackend
 			this.context = context;
 		}
 
+		void UpdateProperty (Gtk.AccessibleProperty property, string text)
+		{
+			if (widget == null)
+				return;
+			if (text == null) {
+				widget.ResetProperty (property);
+				return;
+			}
+			var val = new GLib.Value (text);
+			try {
+				Gtk.AccessibleExtensions.UpdateProperty (widget, property, val);
+			} finally {
+				val.Dispose ();
+			}
+		}
+
 		public virtual Rectangle Bounds {
 			get {
-				int x = 0, y = 0, w = 0, h = 0;
-				(widget.Accessible as AtkComponent)?.GetExtents (out x, out y, out w, out h, Atk.CoordType.Screen);
-				return new Rectangle (x, y, w, h);
+				if (widget == null || !widget.GetBounds (out int x, out int y, out int w, out int h))
+					return Rectangle.Zero;
+				// GTK 4: accessible bounds are relative to the accessible parent; Xwt expects screen coordinates
+				var parent = widget.Parent;
+				var origin = parent != null ? GtkWorkarounds.ConvertToScreenCoordinates (parent, new Point (x, y)) : new Point (x, y);
+				return new Rectangle (origin.X, origin.Y, w, h);
 			}
 			set {
-				(widget.Accessible as AtkComponent)?.SetExtents ((int)value.X, (int)value.Y, (int)value.Width, (int)value.Height, Atk.CoordType.Screen);
+				// GTK 4: accessible bounds are computed from the widget allocation and cannot be overridden
 			}
 		}
 
 		public string Description {
 			get {
-				return widget.Accessible.Description;
+				return description;
 			}
 			set {
-				widget.Accessible.Description = value;
+				description = value;
+				UpdateProperty (Gtk.AccessibleProperty.Description, value);
 			}
 		}
 
-		public virtual string Label { get; set; }
+		public virtual string Label {
+			get {
+				return label;
+			}
+			set {
+				label = value;
+				UpdateProperty (Gtk.AccessibleProperty.Label, value);
+			}
+		}
 
 		public string Identifier {
 			get {
-				return widget.Accessible.Name;
+				return identifier;
 			}
 			set {
-				widget.Accessible.Name = value;
+				// GTK 4: the accessible id is the GtkBuildable id and is read-only; the identifier is only kept here
+				identifier = value;
 			}
 		}
 
 		public Role Role {
 			get {
-				return widget.Accessible.Role.ToXwtRole ();
+				return widget != null ? widget.AccessibleRole.ToXwtRole () : Role.None;
 			}
 
 			set {
-				widget.Accessible.Role = value.ToAtkRole ();
+				// GTK 4: the accessible role can only be changed before the AT context is realized
+				if (widget != null && !widget.IsRealized)
+					widget.AccessibleRole = value.ToGtkRole ();
 			}
 		}
 
-		public virtual string RoleDescription { get; set; }
+		public virtual string RoleDescription {
+			get {
+				return roleDescription;
+			}
+			set {
+				roleDescription = value;
+				UpdateProperty (Gtk.AccessibleProperty.RoleDescription, value);
+			}
+		}
 
 		public virtual string Title { get; set; }
 
 		public string Value {
 			get {
-				if (widget.Accessible is AtkValue) {
-					GLib.Value val = GLib.Value.Empty;
-					(widget.Accessible as AtkValue)?.GetCurrentValue (ref val);
-					return val.Val.ToString ();
-				}
-				if (widget.Accessible is AtkText) {
-					var atkText = (widget.Accessible as AtkText);
-					return atkText?.GetText (0, atkText.CharacterCount - 1);
-				}
-				return null;
+				if (widget is Gtk.Range range)
+					return range.Value.ToString (CultureInfo.InvariantCulture);
+				if (widget is Gtk.IEditable editable)
+					return editable.Text;
+				return value;
 			}
 			set {
-				if (widget.Accessible is AtkValue) {
-					(widget.Accessible as AtkValue)?.SetCurrentValue (new GLib.Value (value));
-				} else if (widget.Accessible is AtkEditableText) {
-					var atkText = (widget.Accessible as AtkEditableText);
-					atkText.TextContents = value;
+				if (widget is Gtk.Range range) {
+					if (double.TryParse (value, NumberStyles.Float, CultureInfo.InvariantCulture, out double d))
+						range.Value = d;
+				} else if (widget is Gtk.IEditable editable) {
+					editable.Text = value ?? string.Empty;
+				} else {
+					this.value = value;
+					UpdateProperty (Gtk.AccessibleProperty.ValueText, value);
 				}
 			}
 		}
 
 		public virtual Widget LabelWidget {
-			set { /* Not supported */ }
+			set {
+				if (widget == null)
+					return;
+				var labelWidget = value != null ? (Toolkit.GetBackend (value) as IGtkWidgetBackend)?.Widget : null;
+				if (labelWidget != null)
+					Gtk.AccessibleExtensions.UpdateRelation (widget, Gtk.AccessibleRelation.LabelledBy, labelWidget);
+				else
+					widget.ResetRelation (Gtk.AccessibleRelation.LabelledBy);
+			}
 		}
 
 		public virtual Uri Uri { get; set; }
 
 		public virtual bool IsAccessible {
 			get {
-				return widget.Accessible?.Role != Atk.Role.Invalid;
+				return widget != null && widget.AccessibleRole != Gtk.AccessibleRole.None && widget.AccessibleRole != Gtk.AccessibleRole.Presentation;
 			}
 			set {
 				// TODO
-				//if (widget.Accessible != null)
-				//	return widget.Accessible.Role = Atk.Role.Invalid;
 			}
 		}
 
@@ -190,7 +234,7 @@ namespace Xwt.GtkBackend
 
 		public virtual void AddChild (object nativeChild)
 		{
-			// TODO
+			// TODO: custom child accessibles need a managed GtkAccessible implementation
 		}
 
 		public virtual void RemoveChild (object nativeChild)
@@ -219,7 +263,9 @@ namespace Xwt.GtkBackend
 
 		public virtual void MakeAnnouncement (string message, bool polite = false)
 		{
-			// TODO
+			if (widget == null || string.IsNullOrEmpty (message))
+				return;
+			widget.Announce (message, polite ? Gtk.AccessibleAnnouncementPriority.Medium : Gtk.AccessibleAnnouncementPriority.High);
 		}
 	}
 }

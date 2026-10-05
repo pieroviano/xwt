@@ -23,21 +23,21 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-
 using Xwt.Backends;
 
 namespace Xwt.GtkBackend
 {
 	public class UtilityWindowBackend : WindowBackend, IUtilityWindowBackend
 	{
+		/// <summary>
+		/// GTK 4: a regular toplevel (transient for its parent when the frontend sets one); there is
+		/// no utility type hint and no skip-taskbar/pager hints.
+		/// </summary>
 		public override void Initialize ()
 		{
-			Window = new GtkPopoverWindow (Gtk.WindowType.Toplevel);
-			Window.TypeHint = Gdk.WindowTypeHint.Utility;
-			Window.SkipPagerHint = true;
-			Window.SkipTaskbarHint = true;
-			Window.Add (CreateMainLayout ());
+			Window = new Gtk.Window ();
+			Window.AddCssClass ("utility");
+			Window.Child = CreateMainLayout ();
 		}
 	}
-	
 }

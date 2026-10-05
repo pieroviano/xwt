@@ -36,7 +36,6 @@ namespace Xwt.GtkBackend
 		public ScrollViewBackend ()
 		{
 			Widget = new Gtk.ScrolledWindow ();
-			Widget.Show ();
 		}
 		
 		protected new Gtk.ScrolledWindow Widget {
@@ -53,13 +52,16 @@ namespace Xwt.GtkBackend
 		public void SetChild (IWidgetBackend child)
 		{
 			RemoveChildPlacement (currentChild);
+			currentChild = null;
 
-			if (Widget.Child != null) {
-				if (Widget.Child is Gtk.Bin) {
-					Gtk.Bin vp = (Gtk.Bin) Widget.Child;
-					vp.Remove (vp.Child);
-				}
-				Widget.Remove (Widget.Child);
+			var oldChild = Widget.Child;
+			if (oldChild != null) {
+				// detach the content from the viewport we created, so that it can be reused
+				if (oldChild is Gtk.Viewport viewport)
+					viewport.Child = null;
+				else if (oldChild is GtkViewPort customViewport)
+					customViewport.Child = null;
+				Widget.Child = null;
 			}
 			
 			if (child != null) {
@@ -69,17 +71,16 @@ namespace Xwt.GtkBackend
 				WidgetBackend wb = (WidgetBackend) child;
 				
 				if (wb.EventSink.SupportsCustomScrolling ()) {
-					CustomViewPort vp = new CustomViewPort (wb.EventSink);
-					vp.Show ();
-					vp.Add (w);
+					// the widget scrolls itself using the adjustments of the scrolled window
+					var vp = new CustomViewPort (wb.EventSink);
+					vp.Child = w;
 					Widget.Child = vp;
 				}
-				else if (w is Gtk.IScrollable)
+				else if (w is Gtk.IScrollable || w is Gtk.IScrollableImplementor)
 					Widget.Child = w;
 				else {
-					Gtk.Viewport vp = new Gtk.Viewport ();
-					vp.Show ();
-					vp.Add (w);
+					var vp = new Gtk.Viewport (null, null);
+					vp.Child = w;
 					Widget.Child = vp;
 				}
 			}
@@ -98,6 +99,9 @@ namespace Xwt.GtkBackend
 				if (((ScrollViewEvent)eventId) == ScrollViewEvent.VisibleRectChanged) {
 					Widget.Hadjustment.ValueChanged += HandleValueChanged;
 					Widget.Vadjustment.ValueChanged += HandleValueChanged;
+					// page size changes (resize) also change the visible rect
+					Widget.Hadjustment.Changed += HandleValueChanged;
+					Widget.Vadjustment.Changed += HandleValueChanged;
 				}
 			}
 		}
@@ -109,11 +113,12 @@ namespace Xwt.GtkBackend
 				if (((ScrollViewEvent)eventId) == ScrollViewEvent.VisibleRectChanged) {
 					Widget.Hadjustment.ValueChanged -= HandleValueChanged;
 					Widget.Vadjustment.ValueChanged -= HandleValueChanged;
+					Widget.Hadjustment.Changed -= HandleValueChanged;
+					Widget.Vadjustment.Changed -= HandleValueChanged;
 				}
 			}
 		}
 		
-		[GLib.ConnectBefore]
 		void HandleValueChanged (object sender, EventArgs e)
 		{
 			ApplicationContext.InvokeUserCode (EventSink.OnVisibleRectChanged);
@@ -129,7 +134,7 @@ namespace Xwt.GtkBackend
 		
 		public bool BorderVisible {
 			get {
-				return Widget.ShadowType == Gtk.ShadowType.In;
+				return Widget.HasFrame;
 			}
 			set {
 				showBorder = value;
@@ -139,11 +144,8 @@ namespace Xwt.GtkBackend
 		
 		void UpdateBorder ()
 		{
-			var shadowType = showBorder ? Gtk.ShadowType.In : Gtk.ShadowType.None;
-			if (Widget.Child is Gtk.Viewport)
-				((Gtk.Viewport)Widget.Child).ShadowType = shadowType;
-			else
-				Widget.ShadowType = shadowType;
+			// GTK 4: the frame belongs to the scrolled window (no viewport/shadow types)
+			Widget.HasFrame = showBorder;
 		}
 		
 		public ScrollPolicy VerticalScrollPolicy {
@@ -175,9 +177,12 @@ namespace Xwt.GtkBackend
 		}
 	}
 
+	/// <summary>
+	/// Hosts an Xwt widget that implements its own scrolling: the adjustments the scrolled
+	/// window assigns to this GtkScrollable are handed to the Xwt widget.
+	/// </summary>
 	sealed class CustomViewPort: GtkViewPort
 	{
-		Gtk.Widget child;
 		IWidgetEventSink eventSink;
 
 		public CustomViewPort (IntPtr raw) : base (raw)
@@ -188,32 +193,11 @@ namespace Xwt.GtkBackend
 		{
 			this.eventSink = eventSink;
 		}
-		
-		protected override void OnAdded (Gtk.Widget widget)
-		{
-			base.OnAdded (widget);
-			child = widget;
-		}
-
-		protected override void OnSizeAllocated (Gdk.Rectangle allocation)
-		{
-			base.OnSizeAllocated (allocation);
-			if (child != null)
-				child.SizeAllocate (allocation);
-		}
-
-		protected override void OnSizeRequested (ref Gtk.Requisition requisition)
-		{
-			if (Child != null) {
-				requisition = Child.SizeRequest ();
-			} else {
-				requisition.Width = 0;
-				requisition.Height = 0;
-			}
-		}
 
 		protected override void OnSetScrollAdjustments (Gtk.Adjustment hadj, Gtk.Adjustment vadj)
 		{
+			if (eventSink == null)
+				return;
 			var hsa = new ScrollAdjustmentBackend (hadj);
 			var vsa = new ScrollAdjustmentBackend (vadj);
 			
@@ -221,4 +205,3 @@ namespace Xwt.GtkBackend
 		}
 	}
 }
-

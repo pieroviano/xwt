@@ -47,7 +47,9 @@ namespace Xwt.GtkBackend
 			public Pango.Layout Layout {
 				get {
 					if (hasUnassignedAttributes) {
-						attributes.AssignTo (layout);
+						// a copy: Pango ignores set_attributes with a list equal to the current one,
+						// so in-place changes to a shared list would not invalidate the layout
+						layout.Attributes = attributes.List.Copy ();
 						hasUnassignedAttributes = false;
 					}
 					return layout;
@@ -116,7 +118,7 @@ namespace Xwt.GtkBackend
 
 		static GtkTextLayoutBackendHandler ()
 		{
-			using (Cairo.Surface sf = new Cairo.ImageSurface (Cairo.Format.ARGB32, 1, 1)) {
+			using (Cairo.Surface sf = new Cairo.ImageSurface (Cairo.Format.Argb32, 1, 1)) {
 				SharedContext = new Cairo.Context (sf);
 			}
 		}

@@ -34,7 +34,6 @@ namespace Xwt.GtkBackend
 		{
 			Widget = new Gtk.Calendar ();
 			Widget.DaySelected += CheckBetweenMinMax;
-			Widget.Show ();
 		}
 
 		void CheckBetweenMinMax (object sender, EventArgs e)
@@ -74,10 +73,11 @@ namespace Xwt.GtkBackend
 
 		public DateTime Date {
 			get {
-				return Widget.Date;
+				// GTK 4: the calendar exchanges dates as GDateTime (no time part is shown)
+				return Widget.Date.ToSystemDateTime ().Date;
 			}
 			set {
-				Widget.Date = value;
+				Widget.SelectDay (GLib.DateTime.FromSystemDateTime (value.Date));
 			}
 		}
 
@@ -88,8 +88,8 @@ namespace Xwt.GtkBackend
 				return minimumDate;
 			}
 			set {
-				if (Widget.Date < value) {
-					Widget.Date = value;
+				if (Date < value) {
+					Date = value;
 				}
 				minimumDate = value;
 			}
@@ -102,8 +102,8 @@ namespace Xwt.GtkBackend
 				return maximumDate;
 			}
 			set {
-				if (Widget.Date > value) {
-					Widget.Date = value;
+				if (Date > value) {
+					Date = value;
 				}
 				maximumDate = value;
 			}

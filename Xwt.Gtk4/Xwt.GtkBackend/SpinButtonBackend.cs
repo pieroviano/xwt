@@ -27,12 +27,9 @@
 using System;
 using Xwt.Backends;
 
-
-using Gtk;
-
 namespace Xwt.GtkBackend
 {
-	public partial class SpinButtonBackend : WidgetBackend, ISpinButtonBackend
+	public class SpinButtonBackend : WidgetBackend, ISpinButtonBackend
 	{
 		string indeterminateMessage;
 
@@ -45,24 +42,22 @@ namespace Xwt.GtkBackend
 			Widget = (Gtk.SpinButton) CreateWidget ();
 			Widget.Numeric = true;
 			Widget.Alignment = 1.0f;
-			InitializeGtk ();
-			Widget.Show ();
 		}
-		
+
 		protected virtual Gtk.Widget CreateWidget ()
 		{
-			return new Gtk.SpinButton (0, 1, .1);
+			return new Gtk.SpinButton (new Gtk.Adjustment (0, 0, 1, .1, 1, 0), 0, 1);
 		}
-		
+
 		protected new Gtk.SpinButton Widget {
 			get { return (Gtk.SpinButton)base.Widget; }
 			set { base.Widget = value; }
 		}
-		
+
 		protected new ISpinButtonEventSink EventSink {
 			get { return (ISpinButtonEventSink)base.EventSink; }
 		}
-		
+
 		public override void EnableEvent (object eventId)
 		{
 			base.EnableEvent (eventId);
@@ -71,7 +66,7 @@ namespace Xwt.GtkBackend
 					Widget.ValueChanged += HandleValueChanged;
 			}
 		}
-		
+
 		public override void DisableEvent (object eventId)
 		{
 			base.DisableEvent (eventId);
@@ -81,7 +76,7 @@ namespace Xwt.GtkBackend
 			}
 		}
 
-		void HandleValueChanged (object sender, EventArgs e)
+		void HandleValueChanged (object sender, System.EventArgs e)
 		{
 			ApplicationContext.InvokeUserCode (EventSink.ValueChanged);
 		}
@@ -126,15 +121,11 @@ namespace Xwt.GtkBackend
 
 		public void SetButtonStyle (ButtonStyle style)
 		{
-			switch (style) {
-			case ButtonStyle.Borderless:
-			case ButtonStyle.Flat:
-				Widget.HasFrame = false;
-				break;
-			default:
-				Widget.HasFrame = true;
-				break;
-			}
+			// GTK 4: Gtk.SpinButton has no "has-frame" property; remove the frame via CSS
+			bool flat = style == ButtonStyle.Borderless || style == ButtonStyle.Flat;
+			Widget.SetStyle ("border-style", flat ? "none" : null);
+			Widget.SetStyle ("box-shadow", flat ? "none" : null);
+			Widget.SetStyle ("background-color", flat ? "transparent" : null);
 		}
 
 		public bool IsIndeterminate {
@@ -160,4 +151,3 @@ namespace Xwt.GtkBackend
 		}
 	}
 }
-

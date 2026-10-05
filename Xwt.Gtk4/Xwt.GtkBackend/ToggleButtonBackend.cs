@@ -49,6 +49,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 
@@ -60,22 +61,22 @@ namespace Xwt.GtkBackend
 		public ToggleButtonBackend ()
 		{
 		}
-		
+
 		public override void Initialize ()
 		{
 			Widget = new Gtk.ToggleButton ();
-			Widget.Show ();
+			InitializeButton ();
 		}
-		
+
 		protected new Gtk.ToggleButton Widget {
 			get { return (Gtk.ToggleButton)base.Widget; }
 			set { base.Widget = value; }
 		}
-		
+
 		protected new IToggleButtonEventSink EventSink {
 			get { return (IToggleButtonEventSink)base.EventSink; }
 		}
-		
+
 		public bool Active {
 			get {
 				return Widget.Active;
@@ -88,7 +89,7 @@ namespace Xwt.GtkBackend
 				ignoreClickEvents = false;
 			}
 		}
-		
+
 		public override void EnableEvent (object eventId)
 		{
 			base.EnableEvent (eventId);
@@ -98,7 +99,7 @@ namespace Xwt.GtkBackend
 				}
 			}
 		}
-		
+
 		public override void DisableEvent (object eventId)
 		{
 			base.DisableEvent (eventId);
@@ -114,30 +115,15 @@ namespace Xwt.GtkBackend
 			ChangeImageIfDisclosure ();
 			ApplicationContext.InvokeUserCode (EventSink.OnToggled);
 		}
-		
+
 		void ChangeImageIfDisclosure ()
 		{
 			if (((Button)Frontend).Type != ButtonType.Disclosure)
 				return;
-			
-			Gtk.ArrowType newArrowType = Gtk.ArrowType.None;
-			switch (((Gtk.Arrow)Widget.Image).ArrowType) {
-			case Gtk.ArrowType.Down:
-				newArrowType = Gtk.ArrowType.Up;
-				break;
-			case Gtk.ArrowType.Up:
-				newArrowType = Gtk.ArrowType.Down;
-				break;
-			case Gtk.ArrowType.Left:
-				newArrowType = Gtk.ArrowType.Right;
-				break;
-			case Gtk.ArrowType.Right:
-				newArrowType = Gtk.ArrowType.Left;
-				break;
-			}
-			Widget.Image = new Gtk.Arrow (newArrowType, Gtk.ShadowType.Out);
-			Widget.Image.ShowAll ();
+			var arrow = Widget.Child as Gtk.Image;
+			if (arrow == null)
+				return;
+			arrow.IconName = arrow.IconName == DisclosureUpIcon ? DisclosureDownIcon : DisclosureUpIcon;
 		}
 	}
 }
-

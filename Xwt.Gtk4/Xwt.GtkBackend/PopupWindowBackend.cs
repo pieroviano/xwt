@@ -23,7 +23,6 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-
 using Xwt.Backends;
 
 namespace Xwt.GtkBackend
@@ -32,24 +31,25 @@ namespace Xwt.GtkBackend
 	{
 		PopupWindow.PopupType windowType;
 
+		/// <summary>
+		/// GTK 4: an undecorated toplevel. There are no window type hints (tooltip/popup-menu),
+		/// no skip-taskbar/pager hints and no positioning, so the window manager places it.
+		/// Popups anchored to a widget should use <see cref="Gtk.Popover"/> (see PopoverBackend).
+		/// </summary>
 		public override void Initialize ()
 		{
-			Window = new GtkPopoverWindow (windowType == PopupWindow.PopupType.Tooltip ? Gtk.WindowType.Popup : Gtk.WindowType.Toplevel);
-
+			Window = new Gtk.Window ();
 			switch (windowType) {
 			case PopupWindow.PopupType.Tooltip:
-				Window.TypeHint = Gdk.WindowTypeHint.Tooltip;
 				Window.Decorated = false;
+				Window.AddCssClass ("tooltip");
 				break;
 			case PopupWindow.PopupType.Menu:
-				Window.TypeHint = Gdk.WindowTypeHint.PopupMenu;
 				Window.Decorated = false;
+				Window.AddCssClass ("popup");
 				break;
 			}
-
-			Window.SkipPagerHint = true;
-			Window.SkipTaskbarHint = true;
-			Window.Add (CreateMainLayout ());
+			Window.Child = CreateMainLayout ();
 		}
 
 		void IPopupWindowBackend.Initialize (IWindowFrameEventSink sink, PopupWindow.PopupType type)

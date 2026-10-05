@@ -47,7 +47,6 @@ namespace Xwt.GtkBackend
 		public RichTextViewBackend ()
 		{
 			Widget = new GtkTextView ();
-			Widget.Show ();
 			ReadOnly = true;
 			Widget.WrapMode = Gtk.WrapMode.Word;
 			InitTagTable ();
@@ -182,11 +181,11 @@ namespace Xwt.GtkBackend
 		public Drawing.Color TextColor {
 			get {
 				var tag = table.Lookup ("textColor");
-				return tag.ForegroundGdk.ToXwtValue ();
+				return tag.ForegroundRgba.ToXwtValue ();
 			}
 			set {
 				var tag = table.Lookup ("textColor");
-				tag.ForegroundGdk = value.ToGtkValue ();
+				tag.ForegroundRgba = value.ToGtkRgbaValue ();
 				var buffer = Widget.Buffer;
 				buffer.ApplyTag (tag, buffer.StartIter, buffer.EndIter);
 			}
@@ -205,9 +204,8 @@ namespace Xwt.GtkBackend
 
 		protected override void OnSetBackgroundColor(Drawing.Color color)
 		{
-			base.OnSetBackgroundColor(color);
-			Widget.SetBackgroundColor(Gtk.StateType.Normal, color);
-			Widget.SetBackgroundColor(Gtk.StateType.Insensitive, color);
+			// the text area is a CSS sub-node: the view applies the color to both
+			Widget.BackgroundColor = color;
 		}
 
 		void HandleNavigateToUrl (object sender, NavigateToUrlEventArgs e)
@@ -377,7 +375,7 @@ namespace Xwt.GtkBackend
 				var link = openLinks.Pop ();
 				var tag = new Gtk.TextTag (null);
 				tag.Underline = Pango.Underline.Single;
-				tag.ForegroundGdk = Toolkit.CurrentEngine.Defaults.FallbackLinkColor.ToGtkValue ();
+				tag.ForegroundRgba = Toolkit.CurrentEngine.Defaults.FallbackLinkColor.ToGtkRgbaValue ();
 				TagTable.Add (tag);
 				ApplyTag (tag, GetIterAtMark (link.StartMark), EndIter);
 				Links[tag] = link;
@@ -412,10 +410,10 @@ namespace Xwt.GtkBackend
 
 					if (attr is BackgroundTextAttribute) {
 						var xa = (BackgroundTextAttribute)attr;
-						tag.BackgroundGdk = xa.Color.ToGtkValue ();
+						tag.BackgroundRgba = xa.Color.ToGtkRgbaValue ();
 					} else if (attr is ColorTextAttribute) {
 						var xa = (ColorTextAttribute)attr;
-						tag.ForegroundGdk = xa.Color.ToGtkValue ();
+						tag.ForegroundRgba = xa.Color.ToGtkRgbaValue ();
 					} else if (attr is FontWeightTextAttribute) {
 						var xa = (FontWeightTextAttribute)attr;
 						tag.Weight = (Pango.Weight)(int)xa.Weight;
@@ -438,7 +436,7 @@ namespace Xwt.GtkBackend
 							Uri.TryCreate (markup.Text.Substring (xa.StartIndex, xa.Count), UriKind.RelativeOrAbsolute, out uri);
 						var link = new Link { Href = uri };
 						tag.Underline = Pango.Underline.Single;
-						tag.ForegroundGdk = Toolkit.CurrentEngine.Defaults.FallbackLinkColor.ToGtkValue ();
+						tag.ForegroundRgba = Toolkit.CurrentEngine.Defaults.FallbackLinkColor.ToGtkRgbaValue ();
 						Links [tag] = link;
 					}
 
@@ -452,9 +450,40 @@ namespace Xwt.GtkBackend
 
 		class GtkTextView : Gtk.TextView
 		{
+			static int cssCounter;
+
 			bool selectable = true;
 			Link activeLink;
-			Gdk.Cursor defaultCursor, handCursor;
+			Link pressedLink;
+			bool pressClaimed;
+			readonly string cssClass;
+			readonly Gtk.CssProvider cssProvider = new Gtk.CssProvider ();
+			Drawing.Color? backgroundColor;
+
+			public GtkTextView ()
+			{
+				cssClass = "xwt-richtext-" + (++cssCounter).ToString (System.Globalization.CultureInfo.InvariantCulture);
+				AddCssClass (cssClass);
+				StyleContext.AddProvider (cssProvider, Gtk.StyleProviderPriority.Application + 10);
+
+				var motion = new Gtk.EventControllerMotion ();
+				motion.Motion += HandleMotion;
+				motion.Leave += HandleLeave;
+				AddController (motion);
+
+				// capture phase: runs before GtkTextView's own selection gestures
+				var click = new Gtk.GestureClick ();
+				click.Button = 0;
+				click.PropagationPhase = Gtk.PropagationPhase.Capture;
+				click.Pressed += HandlePressed;
+				click.Released += HandleReleased;
+				AddController (click);
+
+				AddNotification ("sensitive", (o, a) => SetDefaultCursor ());
+				AddNotification ("buffer", (o, a) => UpdateLinkColor ());
+				SetDefaultCursor ();
+				UpdateBackground ();
+			}
 
 			public bool Selectable {
 				get {
@@ -462,6 +491,15 @@ namespace Xwt.GtkBackend
 				}
 				set {
 					selectable = value;
+					SetDefaultCursor ();
+					UpdateBackground ();
+				}
+			}
+
+			public Drawing.Color? BackgroundColor {
+				get { return backgroundColor; }
+				set {
+					backgroundColor = value;
 					UpdateBackground ();
 				}
 			}
@@ -475,35 +513,19 @@ namespace Xwt.GtkBackend
 					if (buffer == null)
 						throw new InvalidOperationException ();
 					base.Buffer = buffer;
+					UpdateLinkColor ();
 				}
 			}
 
 			public event EventHandler<NavigateToUrlEventArgs> NavigateToUrl;
 
-			Gdk.Cursor DefaultCursor {
-				get {
-					if (defaultCursor == null)
-						defaultCursor = new Gdk.Cursor (Gdk.CursorType.Xterm);
-					return defaultCursor;
-				}
-			}
-
-			Gdk.Cursor HandCursor {
-				get {
-					if (handCursor == null)
-						handCursor = new Gdk.Cursor (Gdk.CursorType.Hand1);
-					return handCursor;
-				}
-			}
-
-			protected override bool OnMotionNotifyEvent (Gdk.EventMotion evnt)
+			void HandleMotion (object o, Gtk.MotionArgs args)
 			{
-				Link link = GetLinkAtPos (evnt.X, evnt.Y);
+				Link link = GetLinkAtPos (args.X, args.Y);
 				if (link != null) {
 					if (activeLink == null) {
 						TooltipText = link.Title;
-
-						GetWindow (Gtk.TextWindowType.Text).Cursor = HandCursor;
+						Cursor = WidgetBackend.GetCursor (CursorType.Hand);
 					} else if (activeLink.Title != link.Title) {
 						TooltipText = link.Title;
 					}
@@ -513,37 +535,51 @@ namespace Xwt.GtkBackend
 					TooltipText = null;
 					SetDefaultCursor ();
 				}
-
-				if (selectable)
-					return base.OnMotionNotifyEvent (evnt);
-				return false;
 			}
 
-			protected override bool OnButtonPressEvent (Gdk.EventButton evnt)
+			void HandleLeave (object sender, EventArgs e)
 			{
-				if (selectable)
-					return base.OnButtonPressEvent (evnt);
-				return false;
+				if (activeLink != null) {
+					activeLink = null;
+					TooltipText = null;
+					SetDefaultCursor ();
+				}
 			}
 
-			protected override bool OnButtonReleaseEvent (Gdk.EventButton evnt)
+			void HandlePressed (object o, Gtk.PressedArgs args)
 			{
-				if (NavigateToUrl != null && (PointerButton)evnt.Button == PointerButton.Left) {
-					Link link = activeLink ?? GetLinkAtPos (evnt.X, evnt.Y);
+				var gesture = (Gtk.GestureClick)o;
+				pressedLink = null;
+				pressClaimed = false;
+				if (gesture.CurrentButton == (uint)PointerButton.Left)
+					pressedLink = GetLinkAtPos (args.X, args.Y);
+				// a click on a link navigates, and a non-selectable view must not start a selection:
+				// claiming the sequence keeps GtkTextView's own gestures from handling it
+				if ((pressedLink != null && NavigateToUrl != null) || !selectable) {
+					gesture.SetState (Gtk.EventSequenceState.Claimed);
+					pressClaimed = true;
+				}
+			}
 
+			void HandleReleased (object o, Gtk.ReleasedArgs args)
+			{
+				var gesture = (Gtk.GestureClick)o;
+				if (NavigateToUrl != null && gesture.CurrentButton == (uint)PointerButton.Left) {
+					Link link = GetLinkAtPos (args.X, args.Y) ?? (pressClaimed ? pressedLink : null);
 					if (link?.Href != null)
 						NavigateToUrl?.Invoke (this, new NavigateToUrlEventArgs (link.Href));
 				}
-				if (selectable)
-					return base.OnButtonReleaseEvent (evnt);
-				return false;
+				pressedLink = null;
+				pressClaimed = false;
 			}
 
 			Link GetLinkAtPos (double mousex, double mousey)
 			{
 				int x, y;
-				WindowToBufferCoords (Gtk.TextWindowType.Text, (int)mousex, (int)mousey, out x, out y);
-				var iter = GetIterAtLocation (x, y);
+				WindowToBufferCoords (Gtk.TextWindowType.Widget, (int)mousex, (int)mousey, out x, out y);
+				Gtk.TextIter iter;
+				if (!GetIterAtLocation (out iter, x, y))
+					return null;
 				if (Buffer != null) {
 					foreach (var l in Buffer.Links) {
 						if (iter.HasTag (l.Key)) {
@@ -554,69 +590,36 @@ namespace Xwt.GtkBackend
 				return null;
 			}
 
-			protected override void OnStateChanged (Gtk.StateType previous_state)
+			void SetDefaultCursor ()
 			{
-				base.OnStateChanged (previous_state);
-				SetDefaultCursor ();
-				UpdateBackground ();
+				Cursor = Sensitive && Selectable ? WidgetBackend.GetCursor (CursorType.IBeam) : null;
 			}
 
-			protected override void OnGrabNotify (bool was_grabbed)
+			void UpdateLinkColor ()
 			{
-				base.OnGrabNotify (was_grabbed);
-				if (!was_grabbed)
-					SetDefaultCursor ();
+				// GTK 4: there is no "link-color" style property; use the theme's named link color when defined
+				Gdk.RGBA color;
+				if (!StyleContext.LookupColor ("link_color", out color) && !StyleContext.LookupColor ("accent_color", out color))
+					color = Toolkit.CurrentEngine.Defaults.FallbackLinkColor.ToGtkRgbaValue ();
+				if (Buffer != null)
+					foreach (var linkTag in Buffer.Links.Keys)
+						linkTag.ForegroundRgba = color;
 			}
 
 			protected override void OnRealized ()
 			{
 				base.OnRealized ();
-				SetDefaultCursor ();
-				UpdateBackground ();
 				UpdateLinkColor ();
-			}
-
-			protected override void OnStyleSet (Gtk.Style previous_style)
-			{
-				base.OnStyleSet (previous_style);
-				UpdateLinkColor ();
-			}
-
-			void SetDefaultCursor ()
-			{
-				if (!IsRealized)
-					return;
-				Gdk.Cursor cursor = Sensitive && Selectable ? DefaultCursor : null;
-				GetWindow (Gtk.TextWindowType.Text).Cursor = cursor;
-
-			}
-
-			void UpdateLinkColor ()
-			{
-				if (!IsRealized)
-					return;
-				var objColor = StyleGetProperty ("link-color");
-				var color = Gdk.Color.Zero;
-				if (objColor != null)
-					color = (Gdk.Color) objColor;
-				if (color.Equals (Gdk.Color.Zero))
-					color = Toolkit.CurrentEngine.Defaults.FallbackLinkColor.ToGtkValue ();
-				if (Buffer != null)
-					foreach (var linkTag in Buffer.Links.Keys)
-						linkTag.ForegroundGdk = color;
 			}
 
 			void UpdateBackground ()
 			{
-				if (!IsRealized)
-					return;
-				var state = Selectable ? State : Gtk.StateType.Insensitive;
-
-				var bg = Style.Background (state);
-				var bbg = Style.Base (state);
-
-				GetWindow (Gtk.TextWindowType.Widget).Background = bg;
-				GetWindow (Gtk.TextWindowType.Text).Background = bbg;
+				// the text area is the "text" CSS sub-node of the textview: style it through a provider on this view.
+				// A non-selectable view uses the parent's background (GTK 2 used the insensitive background).
+				string bg = backgroundColor.HasValue ? backgroundColor.Value.ToCssValue () : (Selectable ? null : "transparent");
+				var css = bg == null ? "" :
+					"." + cssClass + ", ." + cssClass + " > text { background-color: " + bg + "; }";
+				cssProvider.LoadFromString (css);
 			}
 		}
 	}

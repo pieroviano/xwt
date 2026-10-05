@@ -26,32 +26,51 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 using System;
+using System.IO;
 using Xwt.Backends;
-
 using Xwt.Drawing;
-using System.Linq;
 
 namespace Xwt.GtkBackend
 {
 	public class WindowFrameBackend: IWindowFrameBackend
 	{
 		Gtk.Window window;
-		IntPtr nativeHandle = IntPtr.Zero;
 		IWindowFrameEventSink eventSink;
 		WindowFrame frontend;
 		Size requestedSize;
+		Gdk.Surface layoutSurface;
+		bool boundsEventEnabled, closeEventEnabled, shownEventEnabled, hiddenEventEnabled;
+		bool showInTaskbar = true;
 
 		public WindowFrameBackend ()
 		{
 		}
-		
+
 		public Gtk.Window Window {
 			get { return window; }
 			set {
-				if (window != null)
+				if (window != null) {
+					window.CloseRequest -= HandleCloseRequest;
 					window.Realized -= HandleRealized;
+					window.Unrealized -= HandleUnrealized;
+					window.Shown -= HandleShown;
+					window.Hidden -= HandleHidden;
+					window.RemoveNotification ("default-width", HandleDefaultSizeChanged);
+					window.RemoveNotification ("default-height", HandleDefaultSizeChanged);
+					DetachSurface ();
+				}
 				window = value;
-				window.Realized += HandleRealized;
+				if (window != null) {
+					window.CloseRequest += HandleCloseRequest;
+					window.Realized += HandleRealized;
+					window.Unrealized += HandleUnrealized;
+					window.Shown += HandleShown;
+					window.Hidden += HandleHidden;
+					window.AddNotification ("default-width", HandleDefaultSizeChanged);
+					window.AddNotification ("default-height", HandleDefaultSizeChanged);
+					if (window.Surface != null)
+						AttachSurface (window.Surface);
+				}
 			}
 		}
 
@@ -59,24 +78,15 @@ namespace Xwt.GtkBackend
 			get { return Window; }
 		}
 
+		/// <summary>HWND on Windows, XID on X11; IntPtr.Zero elsewhere or before the window is realized.</summary>
 		public IntPtr NativeHandle {
-			get {
-				if (nativeHandle == IntPtr.Zero)
-					nativeHandle = GtkWorkarounds.GetGtkWindowNativeHandle (Window);
-				return nativeHandle;
-			}
+			get { return GtkWorkarounds.GetGtkWindowNativeHandle (Window); }
 		}
 
-		void HandleRealized (object sender, EventArgs e)
-		{
-			if (opacity != 1d)
-				window.GdkWindow.Opacity = opacity;
-		}
-		
 		protected WindowFrame Frontend {
 			get { return frontend; }
 		}
-		
+
 		public ApplicationContext ApplicationContext {
 			get;
 			private set;
@@ -93,63 +103,73 @@ namespace Xwt.GtkBackend
 			throw new NotSupportedException ();
 		}
 
-		
 		#region IWindowFrameBackend implementation
 		void IWindowFrameBackend.Initialize (IWindowFrameEventSink eventSink)
 		{
 			this.eventSink = eventSink;
 			Initialize ();
-
 		}
 
-		public virtual void Initialize()
+		public virtual void Initialize ()
 		{
 		}
 
 		public virtual void Dispose ()
 		{
-			Window.Destroy ();
+			var w = Window;
+			if (w != null) {
+				Window = null;
+				w.Destroy ();
+			}
 		}
-		
+
 		public IWindowFrameEventSink EventSink {
 			get { return eventSink; }
 		}
 
 		public void Move (double x, double y)
 		{
-			Window.Move ((int)x, (int)y);
-			ApplicationContext.InvokeUserCode (delegate {
-				EventSink.OnBoundsChanged (Bounds);
-			});
+			// GTK 4: toplevels can't be positioned by the application, the window manager places them.
 		}
 
 		public virtual void SetSize (double width, double height)
 		{
-			Window.SetDefaultSize ((int)width, (int)height);
-			if (width <= 0)
-				width = Bounds.Width;
-			if (height <= 0)
-				height = Bounds.Height;
+			if (width <= 0 || height <= 0) {
+				var current = Bounds;
+				if (width <= 0)
+					width = current.Width;
+				if (height <= 0)
+					height = current.Height;
+			}
 			requestedSize = new Size (width, height);
-			Window.Resize ((int)width, (int)height);
+			// GTK 4: the default size is the only size request a toplevel has; a mapped window is resized to it.
+			Window.SetDefaultSize ((int)width, (int)height);
 		}
 
+		/// <summary>
+		/// Window bounds. GTK 4 has no window positioning: the location is the best the platform can
+		/// report (<see cref="GtkWorkarounds.GetSurfaceScreenOrigin"/>, (0,0) where unavailable),
+		/// and setting the bounds applies the size only.
+		/// </summary>
 		public Rectangle Bounds {
 			get {
-				int w, h, x, y;
-				if (Window.GdkWindow != null) {
-					Window.GdkWindow.GetOrigin (out x, out y);
-					Window.GdkWindow.GetSize (out w, out h);
+				var surface = Window.Surface;
+				var origin = GtkWorkarounds.GetSurfaceScreenOrigin (surface);
+				double w, h;
+				if (surface != null && surface.Width > 0) {
+					w = surface.Width;
+					h = surface.Height;
 				} else {
-					Window.GetPosition (out x, out y);
-					Window.GetSize (out w, out h);
+					int dw, dh;
+					Window.GetDefaultSize (out dw, out dh);
+					w = dw > 0 ? dw : Math.Max (requestedSize.Width, Window.Width);
+					h = dh > 0 ? dh : Math.Max (requestedSize.Height, Window.Height);
 				}
-				return new Rectangle (x, y, w, h);
+				return new Rectangle (origin.X, origin.Y, w, h);
 			}
 			set {
+				// GTK 4: the location can't be set (no window positioning), only the size.
 				requestedSize = value.Size;
-				Window.Move ((int)value.X, (int)value.Y);
-				Window.Resize ((int)value.Width, (int)value.Height);
 				Window.SetDefaultSize ((int)value.Width, (int)value.Height);
 				ApplicationContext.InvokeUserCode (delegate {
 					EventSink.OnBoundsChanged (Bounds);
@@ -167,39 +187,22 @@ namespace Xwt.GtkBackend
 		}
 
 		bool IWindowFrameBackend.Visible {
-			get {
-				return window.Visible;
-			}
-			set {
-				window.Visible = value;
-			}
+			get { return window.Visible; }
+			set { window.Visible = value; }
 		}
 
 		bool IWindowFrameBackend.Sensitive {
-			get {
-				return window.Sensitive;
-			}
-			set {
-				window.Sensitive = value;
-			}
+			get { return window.Sensitive; }
+			set { window.Sensitive = value; }
 		}
 
-		double opacity = 1d;
 		double IWindowFrameBackend.Opacity {
-			get {
-				return opacity;
-			}
-			set {
-				opacity = value;
-				if (Window.GdkWindow != null)
-					Window.GdkWindow.Opacity = value;
-			}
+			get { return Window.Opacity; }
+			set { Window.Opacity = value; }
 		}
 
 		bool IWindowFrameBackend.HasFocus {
-			get {
-				return Window.HasToplevelFocus;
-			}
+			get { return Window.IsActive; }
 		}
 
 		string IWindowFrameBackend.Title {
@@ -208,62 +211,83 @@ namespace Xwt.GtkBackend
 		}
 
 		bool IWindowFrameBackend.Decorated {
-			get {
-				return Window.Decorated;
-			}
-			set {
-				Window.Decorated = value;
-			}
+			get { return Window.Decorated; }
+			set { Window.Decorated = value; }
 		}
 
 		bool IWindowFrameBackend.ShowInTaskbar {
-			get {
-				return !Window.SkipTaskbarHint;
-			}
-			set {
-				Window.SkipTaskbarHint = !value;
-			}
+			// GTK 4: there is no skip-taskbar hint; the value is only remembered.
+			get { return showInTaskbar; }
+			set { showInTaskbar = value; }
 		}
 
 		void IWindowFrameBackend.SetTransientFor (IWindowFrameBackend window)
 		{
-			Window.TransientFor = ApplicationContext.Toolkit.GetNativeWindow (window) as Gtk.Window;
+			Window.TransientFor = window != null ? ApplicationContext.Toolkit.GetNativeWindow (window) as Gtk.Window : null;
 		}
 
 		public bool Resizable {
-			get {
-				return Window.Resizable;
-			}
-			set {
-				Window.Resizable = value;
-			}
+			get { return Window.Resizable; }
+			set { Window.Resizable = value; }
 		}
 
-		bool fullScreen;
 		bool IWindowFrameBackend.FullScreen {
-			get {
-				return fullScreen;
-			}
+			get { return Window.IsFullscreen; }
 			set {
-				if (value != fullScreen) {
-					fullScreen = value;
-					if (fullScreen)
-						Window.Fullscreen ();
-					else
-						Window.Unfullscreen ();
-				}
+				if (value)
+					Window.Fullscreen ();
+				else
+					Window.Unfullscreen ();
 			}
 		}
 
+		/// <summary>The <see cref="Gdk.Monitor"/> showing the window (the first monitor while it is unrealized).</summary>
 		object IWindowFrameBackend.Screen {
 			get {
-				return Window.Screen.GetMonitorAtWindow (Window.GdkWindow);
+				var display = Window.Display ?? Gdk.Display.Default;
+				if (Window.Surface != null) {
+					var m = display.GetMonitorAtSurface (Window.Surface);
+					if (m != null)
+						return m;
+				}
+				return GtkDesktopBackend.GetMonitor (display, 0);
 			}
 		}
 
-		public void SetIcon(ImageDescription icon)
+		static int iconCounter;
+		static string iconDirectory;
+
+		/// <summary>
+		/// GTK 4 windows take an icon name only. Images that are not theme icons are saved as
+		/// unthemed PNG icons in a private icon-theme search path and referenced by name.
+		/// </summary>
+		public void SetIcon (ImageDescription icon)
 		{
-			Window.IconList = ((GtkImage)icon.Backend).Frames.Select (f => f.Pixbuf).ToArray ();
+			var img = icon.Backend as GtkImage;
+			if (img == null)
+				return;
+			if (!string.IsNullOrEmpty (img.IconName)) {
+				Window.IconName = img.IconName;
+				return;
+			}
+			try {
+				double size = Math.Max (128, Math.Max (icon.Size.Width, icon.Size.Height));
+				var pix = img.GetBestFrame (ApplicationContext, 1, size, size, false);
+				if (pix == null)
+					return;
+				var display = Window.Display ?? Gdk.Display.Default;
+				if (iconDirectory == null) {
+					var dir = Path.Combine (Path.GetTempPath (), "xwt-gtk4-icons-" + System.Diagnostics.Process.GetCurrentProcess ().Id);
+					Directory.CreateDirectory (dir);
+					Gtk.IconTheme.GetForDisplay (display).AddSearchPath (dir);
+					iconDirectory = dir;
+				}
+				var name = "xwt-window-icon-" + (++iconCounter);
+				File.WriteAllBytes (Path.Combine (iconDirectory, name + ".png"), pix.SaveToBuffer ("png"));
+				Window.IconName = name;
+			} catch (Exception ex) {
+				Console.WriteLine (ex);
+			}
 		}
 		#endregion
 
@@ -272,15 +296,14 @@ namespace Xwt.GtkBackend
 			if (ev is WindowFrameEvent) {
 				switch ((WindowFrameEvent)ev) {
 				case WindowFrameEvent.BoundsChanged:
-					Window.AddEvents ((int)Gdk.EventMask.StructureMask);
-					Window.ConfigureEvent += HandleConfigureEvent; break;
+					boundsEventEnabled = true; break;
 				case WindowFrameEvent.Closed:
 				case WindowFrameEvent.CloseRequested:
-					Window.DeleteEvent += HandleCloseRequested; break;
+					closeEventEnabled = true; break;
 				case WindowFrameEvent.Shown:
-					Window.Shown += HandleShown; break;
+					shownEventEnabled = true; break;
 				case WindowFrameEvent.Hidden:
-					Window.Hidden += HandleHidden; break;
+					hiddenEventEnabled = true; break;
 				}
 			}
 		}
@@ -290,36 +313,88 @@ namespace Xwt.GtkBackend
 			if (ev is WindowFrameEvent) {
 				switch ((WindowFrameEvent)ev) {
 				case WindowFrameEvent.BoundsChanged:
-					Window.ConfigureEvent -= HandleConfigureEvent; break;
+					boundsEventEnabled = false; break;
 				case WindowFrameEvent.Shown:
-					Window.Shown -= HandleShown; break;
+					shownEventEnabled = false; break;
 				case WindowFrameEvent.Hidden:
-					Window.Hidden -= HandleHidden; break;
+					hiddenEventEnabled = false; break;
 				}
 			}
 		}
-		
-		void HandleHidden (object sender, EventArgs e)
+
+		void HandleRealized (object sender, EventArgs e)
 		{
-			ApplicationContext.InvokeUserCode (EventSink.OnHidden);
+			AttachSurface (Window.Surface);
 		}
 
-		void HandleShown (object sender, EventArgs e)
+		void HandleUnrealized (object sender, EventArgs e)
 		{
-			ApplicationContext.InvokeUserCode (EventSink.OnShown);
+			DetachSurface ();
 		}
 
-		[GLib.ConnectBefore]
-		void HandleConfigureEvent (object o, Gtk.ConfigureEventArgs args)
+		void AttachSurface (Gdk.Surface surface)
 		{
+			DetachSurface ();
+			layoutSurface = surface;
+			if (layoutSurface != null)
+				layoutSurface.Layout += HandleSurfaceLayout;
+		}
+
+		void DetachSurface ()
+		{
+			if (layoutSurface != null) {
+				layoutSurface.Layout -= HandleSurfaceLayout;
+				layoutSurface = null;
+			}
+		}
+
+		void HandleSurfaceLayout (object o, Gdk.LayoutArgs args)
+		{
+			NotifyBoundsChanged ();
+		}
+
+		void HandleDefaultSizeChanged (object o, GLib.NotifyArgs args)
+		{
+			// once mapped, size changes are reported by the surface layout signal
+			if (layoutSurface == null)
+				NotifyBoundsChanged ();
+		}
+
+		void NotifyBoundsChanged ()
+		{
+			if (!boundsEventEnabled || eventSink == null)
+				return;
 			ApplicationContext.InvokeUserCode (delegate {
 				EventSink.OnBoundsChanged (Bounds);
 			});
 		}
 
-		void HandleCloseRequested (object o, Gtk.DeleteEventArgs args)
+		void HandleHidden (object sender, EventArgs e)
 		{
-			args.RetVal = !PerformClose (true);
+			if (hiddenEventEnabled && eventSink != null)
+				ApplicationContext.InvokeUserCode (EventSink.OnHidden);
+		}
+
+		void HandleShown (object sender, EventArgs e)
+		{
+			if (shownEventEnabled && eventSink != null)
+				ApplicationContext.InvokeUserCode (EventSink.OnShown);
+		}
+
+		void HandleCloseRequest (object o, Gtk.CloseRequestArgs args)
+		{
+			args.RetVal = OnCloseRequest ();
+		}
+
+		/// <summary>
+		/// Handles the close-request of the window (the user closing it).
+		/// Returns <c>true</c> to keep the window open.
+		/// </summary>
+		protected virtual bool OnCloseRequest ()
+		{
+			if (!closeEventEnabled || eventSink == null)
+				return false;
+			return !PerformClose (true);
 		}
 
 		internal bool PerformClose (bool userClose)
@@ -330,7 +405,7 @@ namespace Xwt.GtkBackend
 			});
 			if (close) {
 				if (!userClose)
-					Window.Hide ();
+					Window.Visible = false;
 				ApplicationContext.InvokeUserCode(EventSink.OnClosed);
 			}
 			return close;
@@ -338,8 +413,6 @@ namespace Xwt.GtkBackend
 
 		public void Present ()
 		{
-			if (Platform.IsMac)
-				GtkWorkarounds.GrabDesktopFocus ();
 			Window.Present ();
 		}
 
@@ -354,4 +427,3 @@ namespace Xwt.GtkBackend
 		}
 	}
 }
-

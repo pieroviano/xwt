@@ -25,7 +25,6 @@
 // THE SOFTWARE.
 
 using System;
-using System.Timers;
 using Xwt.Backends;
 
 
@@ -33,44 +32,37 @@ namespace Xwt.GtkBackend
 {
 	public class ProgressBarBackend: WidgetBackend, IProgressBarBackend
 	{
+		uint? timerId = null;
+
 		public ProgressBarBackend ()
 		{
 		}
 
-		uint? timerId = null;
-
 		public override void Initialize ()
 		{
-			var progressBar = new Gtk.ProgressBar ();
-			Widget = progressBar;
-			Widget.Show ();
+			Widget = new Gtk.ProgressBar ();
 		}
 
-		private bool Pulse ()
+		bool Pulse ()
 		{
 			Widget.Pulse ();
 			return true;
 		}
-		
+
 		protected new Gtk.ProgressBar Widget {
 			get { return (Gtk.ProgressBar)base.Widget; }
 			set { base.Widget = value; }
 		}
 
-		public void SetIndeterminate (bool value) {
+		public void SetIndeterminate (bool value)
+		{
 			if (value) {
 				if (timerId != null)
 					return;
-
+				// GTK 4 has no built-in indeterminate mode: pulse periodically
 				timerId = GLib.Timeout.Add (100, Pulse);
-
-			} else {
-
-				if (timerId == null)
-					return;
-
+			} else
 				DisposeTimeout ();
-			}
 		}
 
 		public void SetFraction (double fraction)
@@ -89,8 +81,7 @@ namespace Xwt.GtkBackend
 		protected override void Dispose (bool disposing)
 		{
 			DisposeTimeout ();
-			base.Dispose(disposing);
+			base.Dispose (disposing);
 		}
 	}
 }
-

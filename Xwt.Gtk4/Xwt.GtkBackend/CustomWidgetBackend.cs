@@ -36,16 +36,13 @@ namespace Xwt.GtkBackend
 
 		public override void Initialize ()
 		{
-			var w = new Gtk.EventBox ();
-			w.VisibleWindow = false;
-			Widget = w;
-			Widget.Show ();
+			Widget = new SingleChildContainer ();
 		}
 
 		WidgetBackend childBackend;
 		
-		protected new Gtk.EventBox Widget {
-			get { return (Gtk.EventBox)base.Widget; }
+		protected new SingleChildContainer Widget {
+			get { return (SingleChildContainer)base.Widget; }
 			set { base.Widget = value; }
 		}
 

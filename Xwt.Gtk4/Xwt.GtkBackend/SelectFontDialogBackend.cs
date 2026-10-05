@@ -29,13 +29,14 @@ using Xwt.Drawing;
 
 namespace Xwt.GtkBackend
 {
-	using FontSelectionDialog = Gtk3FontChooserDialog;
-
+	/// <summary>
+	/// Font selection on <see cref="Gtk.FontDialog"/>; the asynchronous GTK 4 dialog is waited for
+	/// in a nested main loop.
+	/// </summary>
 	public class SelectFontDialogBackend: ISelectFontDialogBackend
 	{
-		readonly FontSelectionDialog dlg;
+		readonly Gtk.FontDialog dlg;
 		string defaultTitle;
-		string defaultPreviewText;
 		ApplicationContext context;
 
 		public Font SelectedFont {
@@ -48,6 +49,7 @@ namespace Xwt.GtkBackend
 			set;
 		}
 
+		/// <summary>GTK 4: GtkFontDialog has no settable preview text; the value is only remembered.</summary>
 		public string PreviewText {
 			get;
 			set;
@@ -55,9 +57,9 @@ namespace Xwt.GtkBackend
 
 		public SelectFontDialogBackend ()
 		{
-			dlg = new FontSelectionDialog (null);
+			dlg = new Gtk.FontDialog ();
+			dlg.Modal = true;
 			defaultTitle = dlg.Title;
-			defaultPreviewText = dlg.PreviewText;
 		}
 
 		public void Initialize (ApplicationContext actx)
@@ -67,24 +69,31 @@ namespace Xwt.GtkBackend
 
 		public bool Run (IWindowFrameBackend parent)
 		{
-			if (!String.IsNullOrEmpty (Title))
-				dlg.Title = Title;
-			else
-				dlg.Title = defaultTitle;
+			dlg.Title = !String.IsNullOrEmpty (Title) ? Title : defaultTitle;
 
-			if (!String.IsNullOrEmpty (PreviewText))
-				dlg.PreviewText = PreviewText;
-			else
-				dlg.PreviewText = defaultPreviewText;
-
+			Pango.FontDescription initial = null;
 			if (SelectedFont != null)
-				dlg.SetFontName (SelectedFont.ToString ());
+				initial = Toolkit.GetBackend (SelectedFont) as Pango.FontDescription ?? Pango.FontDescription.FromString (SelectedFont.ToString ());
 
 			var p = parent != null ? context.Toolkit.GetNativeWindow (parent) as Gtk.Window : null;
-			int result = MessageService.RunCustomDialog (dlg, p);
+			if (p == null)
+				p = MessageService.GetDefaultModalParent ();
 
-			if (result == (int)Gtk.ResponseType.Ok) {
-				SelectedFont = Font.FromName (dlg.FontName);
+			Pango.FontDescription result = null;
+			var loop = new NestedLoop ();
+			dlg.ChooseFont (p, initial, null, (source, res, data) => {
+				try {
+					result = dlg.ChooseFontFinish (res);
+				} catch (GLib.GException) {
+					// dismissed
+				} finally {
+					loop.Quit ();
+				}
+			});
+			loop.Run ();
+
+			if (result != null) {
+				SelectedFont = Font.FromName (result.ToString ());
 				return true;
 			}
 			return false;
@@ -92,8 +101,7 @@ namespace Xwt.GtkBackend
 
 		public void Dispose ()
 		{
-			dlg.Destroy ();
+			dlg.Dispose ();
 		}
 	}
 }
-

@@ -27,81 +27,135 @@
 using System;
 using Xwt.Backends;
 using Xwt.Drawing;
-using Xwt.CairoBackend;
 
 
 namespace Xwt.GtkBackend
 {
-	public partial class ButtonBackend: WidgetBackend, IButtonBackend
+	public class ButtonBackend: WidgetBackend, IButtonBackend
 	{
 		protected bool ignoreClickEvents;
 		ImageDescription image;
 		ContentPosition contentPosition;
-		Pango.FontDescription customFont;
 		Gtk.Label labelWidget;
-		
+		Color? customLabelColor;
+		FormattedText formattedText;
+		bool isDefault;
+		bool miniMode;
+		bool clickedEnabled;
+
+		protected const string DisclosureDownIcon = "pan-down-symbolic";
+		protected const string DisclosureUpIcon = "pan-up-symbolic";
+
 		public ButtonBackend ()
 		{
 		}
 
 		public override void Initialize ()
 		{
-			NeedsEventBox = false;
 			Widget = new Gtk.Button ();
-			Widget.Realized += (o, arg) =>
-			{
-				if (Widget.IsRealized && Widget.CanDefault)
-					Widget.GrabDefault();
-			};
-			base.Widget.Show ();
+			InitializeButton ();
 		}
-		
+
+		/// <summary>Common setup for the button widget, called by subclasses after creating their widget.</summary>
+		protected void InitializeButton ()
+		{
+			base.Widget.Realized += HandleRealized;
+		}
+
+		/// <summary>The Gtk.Button (null if the backend uses a different widget, e.g. a Gtk.MenuButton).</summary>
 		protected new Gtk.Button Widget {
-			get { return (Gtk.Button)base.Widget; }
+			get { return base.Widget as Gtk.Button; }
 			set { base.Widget = value; }
 		}
-		
+
 		protected new IButtonEventSink EventSink {
 			get { return (IButtonEventSink)base.EventSink; }
 		}
 
-		protected override void OnSetBackgroundColor (Color color)
-		{
-			Widget.SetBackgroundColor (color);
-			Widget.SetBackgroundColor (Gtk.StateType.Prelight, color);
+		#region Button widget abstraction (Gtk.Button / Gtk.MenuButton)
+
+		/// <summary>The custom content of the button.</summary>
+		protected virtual Gtk.Widget ButtonContent {
+			get { return Widget.Child; }
+			set { Widget.Child = value; }
 		}
 
-		Color? customLabelColor;
+		/// <summary>Sets a plain text label as the content of the button.</summary>
+		protected virtual void SetButtonLabel (string label)
+		{
+			Widget.Label = label;
+		}
+
+		protected virtual bool ButtonUseUnderline {
+			get { return Widget.UseUnderline; }
+			set { Widget.UseUnderline = value; }
+		}
+
+		protected virtual bool ButtonHasFrame {
+			get { return Widget.HasFrame; }
+			set { Widget.HasFrame = value; }
+		}
+
+		/// <summary>The widget that draws the button frame and background.</summary>
+		protected virtual Gtk.Widget FrameWidget {
+			get { return base.Widget; }
+		}
+
+		protected virtual void ConnectClicked (bool connect)
+		{
+			if (connect)
+				Widget.Clicked += HandleWidgetClicked;
+			else
+				Widget.Clicked -= HandleWidgetClicked;
+		}
+
+		#endregion
+
+		protected override void OnSetBackgroundColor (Color color)
+		{
+			FrameWidget.SetBackgroundColor (color);
+		}
 
 		public virtual Color LabelColor {
 			get {
-				return customLabelColor.HasValue ? customLabelColor.Value : Widget.Style.Foreground (Gtk.StateType.Normal).ToXwtValue ();
+				return customLabelColor.HasValue ? customLabelColor.Value : base.Widget.GetForegroundColor ();
 			}
 			set {
 				customLabelColor = value;
-				Widget.SetForegroundColor (value);
-				Widget.SetForegroundColor (Gtk.StateType.Prelight, value);
-				if (labelWidget != null) {
-					labelWidget.SetForegroundColor (value);
-					labelWidget.SetForegroundColor (Gtk.StateType.Prelight, value);
-				}
+				// CSS color is inherited by the label (and the image of symbolic icons)
+				base.Widget.SetForegroundColor (value);
 			}
 		}
 
 		public virtual bool IsDefault {
-			get { return Widget.CanDefault; }
-			set { Widget.CanDefault = value; }
+			get { return isDefault; }
+			set {
+				isDefault = value;
+				base.Widget.ReceivesDefault = value;
+				var window = GetRootWindow (base.Widget);
+				if (window != null) {
+					if (value)
+						window.DefaultWidget = base.Widget;
+					else if (window.DefaultWidget == base.Widget)
+						window.DefaultWidget = null;
+				}
+			}
 		}
 
-		public override object Font {
-			get {
-				return base.Font;
+		void HandleRealized (object sender, EventArgs e)
+		{
+			// GTK 4: the default widget belongs to the window; apply it once the button is in one
+			if (isDefault) {
+				var window = GetRootWindow (base.Widget);
+				if (window != null)
+					window.DefaultWidget = base.Widget;
 			}
-			set {
-				base.Font = value;
-				customFont = value as Pango.FontDescription;
-				SetButtonType (ButtonType.Normal);
-			}
+		}
+
+		static Gtk.Window GetRootWindow (Gtk.Widget w)
+		{
+			var root = w.Root;
+			return root != null ? GLib.Object.GetObject (root.Handle) as Gtk.Window : null;
 		}
 
 		public void SetContent (string label, bool useMnemonic, ImageDescription image, ContentPosition position)
@@ -110,104 +164,78 @@ namespace Xwt.GtkBackend
 		}
 
 		void SetContent (string label, bool useMnemonic, ImageDescription image, ContentPosition position, bool forceCustomLabel)
-		{			
-			Widget.UseUnderline = useMnemonic;
+		{
+			ButtonUseUnderline = useMnemonic;
 			this.image = image;
 			contentPosition = position;
 			formattedText = null;
+			labelWidget = null;
 
 			if (label != null && label.Length == 0)
 				label = null;
-			
+
 			Button b = (Button) Frontend;
 			if (label != null && image.Backend == null && b.Type == ButtonType.Normal && !forceCustomLabel) {
-				Widget.Label = label;
+				SetButtonLabel (label);
 				return;
 			}
-			
+
 			if (b.Type == ButtonType.Disclosure) {
-				Widget.Label = null;
-				Widget.Image = new Gtk.Arrow (Gtk.ArrowType.Down, Gtk.ShadowType.Out);
-				Widget.Image.ShowAll ();
+				ButtonContent = Gtk.Image.NewFromIconName (DisclosureDownIcon);
 				return;
 			}
-			
+
 			Gtk.Widget contentWidget = null;
-			
+
 			Gtk.Widget imageWidget = null;
 			if (image.Backend != null)
-				imageWidget = new ImageBox (ApplicationContext, image.WithDefaultSize (Gtk.IconSize.Button));
+				imageWidget = new ImageBox (ApplicationContext, image.WithDefaultSize (Xwt.IconSize.Small));
 
-			if (labelWidget != null)
-			{
-				labelWidget.Realized -= HandleStyleUpdate;
-				labelWidget.StyleSet -= HandleStyleUpdate;
-				labelWidget = null;
+			if (label != null) {
+				labelWidget = Gtk.Label.New (null);
+				labelWidget.UseUnderline = useMnemonic;
+				if (useMnemonic)
+					labelWidget.TextWithMnemonic = label;
+				else
+					labelWidget.Text = label;
+				labelWidget.MnemonicWidget = base.Widget;
 			}
 
-			if (label != null && imageWidget == null) {
-				contentWidget = labelWidget = new Gtk.Label (label);
-			}
-			else if (label == null && imageWidget != null) {
+			if (labelWidget != null && imageWidget == null) {
+				contentWidget = labelWidget;
+			} else if (labelWidget == null && imageWidget != null) {
 				contentWidget = imageWidget;
-			}
-			else if (label != null && imageWidget != null) {
-				Gtk.Box box = position == ContentPosition.Left || position == ContentPosition.Right ? (Gtk.Box) new Gtk.HBox (false, 3) : (Gtk.Box) new Gtk.VBox (false, 3);
-				labelWidget = new Gtk.Label (label) { UseUnderline = useMnemonic };
-				
+			} else if (labelWidget != null && imageWidget != null) {
+				var vertical = position == ContentPosition.Top || position == ContentPosition.Bottom;
+				var box = new Gtk.Box (vertical ? Gtk.Orientation.Vertical : Gtk.Orientation.Horizontal, 3);
+				box.Halign = Gtk.Align.Center;
+				box.Valign = Gtk.Align.Center;
 				if (position == ContentPosition.Left || position == ContentPosition.Top) {
-					box.PackStart (imageWidget, false, false, 0);
-					box.PackStart (labelWidget, false, false, 0);
+					box.Append (imageWidget);
+					box.Append (labelWidget);
 				} else {
-					box.PackStart (labelWidget, false, false, 0);
-					box.PackStart (imageWidget, false, false, 0);
+					box.Append (labelWidget);
+					box.Append (imageWidget);
 				}
-				
 				contentWidget = box;
 			}
-			var expandButtonContent = false;
+
 			if (b.Type == ButtonType.DropDown) {
+				var arrow = Gtk.Image.NewFromIconName (DisclosureDownIcon);
 				if (contentWidget != null) {
-					Gtk.HBox box = new Gtk.HBox (false, 3);
-					box.PackStart (contentWidget, true, true, 3);
-					box.PackStart (new Gtk.Arrow (Gtk.ArrowType.Down, Gtk.ShadowType.Out), false, false, 0);
+					var box = new Gtk.Box (Gtk.Orientation.Horizontal, 3);
+					contentWidget.Hexpand = true;
+					contentWidget.Halign = Gtk.Align.Start;
+					if (labelWidget != null)
+						labelWidget.Xalign = 0;
+					box.Append (contentWidget);
+					box.Append (arrow);
 					contentWidget = box;
-					expandButtonContent = true;
 				} else
-					contentWidget = new Gtk.Arrow (Gtk.ArrowType.Down, Gtk.ShadowType.Out);
+					contentWidget = arrow;
 			}
-			if (contentWidget != null) {
-				contentWidget.ShowAll ();
-				Widget.Label = null;
-				Widget.Image = contentWidget;
-				var alignment = Widget.Child as Gtk.Alignment;
-				if (alignment != null) {
-					if (expandButtonContent) {
-						var box = alignment.Child as Gtk.Box;
-						if (box != null) {
-							alignment.Xscale = 1;
-							box.SetChildPacking (box.Children [0], true, true, 0, Gtk.PackType.Start);
-							if (labelWidget != null)
-								labelWidget.Xalign = 0;
-						}
-					} else if (position == ContentPosition.Left && (contentWidget is Gtk.Box)) {
-						// in case the button is wider than its natural size and has text and an image on the left,
-						// optimize its alignment to make the text more centered.
-						// FIXME: more sophisticated size calculation
-						alignment.Xalign = 0.475f;
-					}
-				}
-				if (labelWidget != null) {
-					labelWidget.UseUnderline = useMnemonic;
-					if (customFont != null)
-						labelWidget.ModifyFont (customFont);
-					if (customLabelColor.HasValue) {
-						labelWidget.SetForegroundColor (customLabelColor.Value);
-						labelWidget.SetForegroundColor (Gtk.StateType.Prelight, customLabelColor.Value);
-					}
-				}
-			} else
-				Widget.Label = null;
+
+			ButtonContent = contentWidget;
 		}
 
 		public void SetButtonStyle (ButtonStyle style)
@@ -215,48 +243,32 @@ namespace Xwt.GtkBackend
 			switch (style) {
 			case ButtonStyle.Normal:
 				SetMiniMode (false);
-				Widget.Relief = Gtk.ReliefStyle.Normal;
+				ButtonHasFrame = true;
 				break;
 			case ButtonStyle.Flat:
 				SetMiniMode (false);
-				Widget.Relief = Gtk.ReliefStyle.None;
+				ButtonHasFrame = false;
 				break;
 			case ButtonStyle.Borderless:
 				SetMiniMode (true);
-				Widget.Relief = Gtk.ReliefStyle.None;
+				ButtonHasFrame = false;
 				break;
 			}
 		}
-		
+
 		public void SetButtonType (ButtonType type)
 		{
 			Button b = (Button) Frontend;
 			SetContent (b.Label, b.UseMnemonic, image, b.ImagePosition);
 		}
 
-		FormattedText formattedText;
 		public void SetFormattedText (FormattedText text)
 		{
 			// set content with a custom label, this will recreate labelWidget
-			SetContent (text?.Text, Widget.UseUnderline, image, contentPosition, true);
+			SetContent (text?.Text, ButtonUseUnderline, image, contentPosition, true);
 			formattedText = text;
-			if (!string.IsNullOrEmpty (formattedText?.Text))
-			{
-				if (labelWidget.IsRealized)
-					labelWidget.ApplyFormattedText (formattedText);
-				else
-					labelWidget.Realized += HandleStyleUpdate;
-				labelWidget.StyleSet += HandleStyleUpdate;
-			}
-		}
-
-		void HandleStyleUpdate (object sender, EventArgs e)
-		{
-			// force text update with updated link color
-			if (labelWidget.IsRealized && formattedText != null)
-			{
-				labelWidget.ApplyFormattedText (formattedText);
-			}
+			if (labelWidget != null && !string.IsNullOrEmpty (text?.Text))
+				labelWidget.ApplyFormattedText (text);
 		}
 
 		public override void EnableEvent (object eventId)
@@ -264,63 +276,59 @@ namespace Xwt.GtkBackend
 			base.EnableEvent (eventId);
 			if (eventId is ButtonEvent) {
 				switch ((ButtonEvent)eventId) {
-				case ButtonEvent.Clicked: Widget.Clicked += HandleWidgetClicked; break;
+				case ButtonEvent.Clicked:
+					if (!clickedEnabled) {
+						clickedEnabled = true;
+						ConnectClicked (true);
+					}
+					break;
 				}
 			}
 		}
-		
+
 		public override void DisableEvent (object eventId)
 		{
 			base.DisableEvent (eventId);
 			if (eventId is ButtonEvent) {
 				switch ((ButtonEvent)eventId) {
-				case ButtonEvent.Clicked: Widget.Clicked -= HandleWidgetClicked; break;
+				case ButtonEvent.Clicked:
+					if (clickedEnabled) {
+						clickedEnabled = false;
+						ConnectClicked (false);
+					}
+					break;
 				}
 			}
 		}
 
-		void HandleWidgetClicked (object sender, EventArgs e)
+		protected void HandleWidgetClicked (object sender, EventArgs e)
 		{
 			if (!ignoreClickEvents) {
 				ApplicationContext.InvokeUserCode (EventSink.OnClicked);
 			}
 		}
-		
-		bool miniMode;
-		
+
+		/// <summary>
+		/// Borderless buttons are shrunk to the size of their content (no padding, no theme minimum size).
+		/// </summary>
 		protected void SetMiniMode (bool miniMode)
 		{
-//			Gtk.Rc.ParseString ("style \"Xwt.GtkBackend.CustomButton\" {\n GtkButton::inner-border = {0,0,0,0} GtkButton::child-displacement-x = {0} GtkButton::child-displacement-y = {0}\n }\n");
-//			Gtk.Rc.ParseString ("widget \"*.Xwt.GtkBackend.CustomButton\" style  \"Xwt.GtkBackend.CustomButton\"\n");
-//			Name = "Xwt.GtkBackend.CustomButton";
-			
 			if (this.miniMode == miniMode)
 				return;
 			this.miniMode = miniMode;
-			if (miniMode) {
-				Widget.SizeAllocated += HandleSizeAllocated;
-			}
-			SetMiniModeGtk(miniMode);
-			Widget.QueueResize ();
-		}
-
-		[GLib.ConnectBefore]
-		void HandleSizeAllocated (object o, Gtk.SizeAllocatedArgs args)
-		{
-			Widget.Child.SizeAllocate (args.Allocation);
-			args.RetVal = true;
+			var w = FrameWidget;
+			w.SetStyle ("padding", miniMode ? "0" : null);
+			w.SetStyle ("min-width", miniMode ? "0" : null);
+			w.SetStyle ("min-height", miniMode ? "0" : null);
+			w.QueueResize ();
 		}
 
 		protected override void Dispose (bool disposing)
 		{
-			if (disposing && labelWidget != null) {
-				labelWidget.Realized -= HandleStyleUpdate;
-				labelWidget.StyleSet -= HandleStyleUpdate;
-				labelWidget.Destroy ();
-				labelWidget = null;
-			}
+			if (disposing && base.Widget != null)
+				base.Widget.Realized -= HandleRealized;
+			labelWidget = null;
 			base.Dispose (disposing);
 		}
 	}
 }
-

@@ -48,8 +48,8 @@ namespace Xwt.GtkBackend
 		{
 			Cairo.Format cformat;
 			switch (format) {
-			case ImageFormat.ARGB32: cformat = Cairo.Format.ARGB32; break;
-			default: cformat = Cairo.Format.RGB24; break;
+			case ImageFormat.ARGB32: cformat = Cairo.Format.Argb32; break;
+			default: cformat = Cairo.Format.Rgb24; break;
 			}
 			return new Cairo.ImageSurface (cformat, width, height);
 		}
@@ -71,7 +71,7 @@ namespace Xwt.GtkBackend
 		public static Gdk.Pixbuf CreatePixbuf (Cairo.ImageSurface sf)
 		{
 			byte[] cdata = sf.Data;
-			int nbytes = sf.Format == Cairo.Format.ARGB32 ? 4 : 3;
+			int nbytes = sf.Format == Cairo.Format.Argb32 ? 4 : 3;
 			byte[] data = new byte[(cdata.Length / 4) * nbytes];
 			
 			int i = 0;

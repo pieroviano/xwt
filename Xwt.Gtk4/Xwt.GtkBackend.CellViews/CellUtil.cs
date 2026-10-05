@@ -27,6 +27,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Gtk;
 using Xwt.Backends;
 using TreeModel = Gtk.ITreeModel;
@@ -75,18 +76,23 @@ namespace Xwt.GtkBackend
 
 			crd.Initialize (view, col, target);
 			col.PackStart (target, crd.CellRenderer, view.Expands);
-			col.SetCellDataFunc (target, crd.CellRenderer, (cellLayout, cell, treeModel, iter) => crd.LoadData (treeModel, iter));
+			col.SetCellDataFunc (target, crd.CellRenderer, (cellLayout, cell, treeModel, iter) => {
+				crd.LoadData (treeModel, iter);
+				col.OnCellDataLoaded (target, crd.CellRenderer, iter);
+			});
 			view.AttachBackend (widget, crd);
 			return crd;
 		}
 		
 		public static Gtk.Widget CreateCellRenderer (ApplicationContext actx, ICollection<CellView> views)
 		{
-			if (views.Count == 1) {
-				Gtk.HBox box = new Gtk.HBox ();
-				foreach (var v in views)
-					box.PackStart (CreateCellRenderer (actx, v), v.Expands, false, 0);
-				box.ShowAll ();
+			if (views.Count > 1) {
+				var box = new Gtk.Box (Gtk.Orientation.Horizontal, 0);
+				foreach (var v in views) {
+					var w = CreateCellRenderer (actx, v);
+					w.Hexpand = v.Expands;
+					box.Append (w);
+				}
 				return box;
 			}
 			else
@@ -154,7 +160,13 @@ namespace Xwt.GtkBackend
 		Rectangle GetCellBackgroundBounds (object target, Gtk.CellRenderer cr, Gtk.TreeIter iter);
 		void SetCurrentEventRow (string path);
 		Gtk.Widget EventRootWidget { get; }
+		/// <summary>
+		/// Finds the row under (ex, ey), given in <see cref="EventRootWidget"/> coordinates, if the point
+		/// is inside renderer r. cx/cy are the same point in widget coordinates.
+		/// </summary>
 		bool GetCellPosition (Gtk.CellRenderer r, int ex, int ey, out int cx, out int cy, out Gtk.TreeIter iter);
+		/// <summary>Called after a cell view loaded the data of a row, before the renderer draws it.</summary>
+		void OnCellDataLoaded (object target, Gtk.CellRenderer cr, Gtk.TreeIter iter);
 		void QueueDraw (object target, Gtk.TreeIter iter);
 		void QueueResize (object target, Gtk.TreeIter iter);
 		TreeModel Model { get; }
@@ -163,4 +175,3 @@ namespace Xwt.GtkBackend
 	}
 
 }
-

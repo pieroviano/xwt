@@ -64,7 +64,7 @@ namespace Xwt.GtkBackend
 				if (pattern != null)
 					pattern.Dispose ();
 				Gdk.Pixbuf pb = ((GtkImage)Image.Backend).GetBestFrame (actx, scaleFactor, Image.Size.Width, Image.Size.Height, false);
-				using (var imgs = new Cairo.ImageSurface (Cairo.Format.ARGB32, (int)(Image.Size.Width * scaleFactor), (int)(Image.Size.Height * scaleFactor))) {
+				using (var imgs = new Cairo.ImageSurface (Cairo.Format.Argb32, (int)(Image.Size.Width * scaleFactor), (int)(Image.Size.Height * scaleFactor))) {
 					var ic = new Cairo.Context (imgs);
 					ic.Scale ((double)imgs.Width / (double)pb.Width, (double)imgs.Height / (double)pb.Height);
 					Gdk.CairoHelper.SetSourcePixbuf (ic, pb, 0, 0);

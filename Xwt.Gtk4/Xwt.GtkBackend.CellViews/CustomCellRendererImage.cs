@@ -65,7 +65,7 @@ namespace Xwt.GtkBackend
 			set { image = value; }
 		}
 
-		protected override void OnRender (Cairo.Context cr, Gtk.Widget widget, Gdk.Rectangle background_area, Gdk.Rectangle cell_area, CellRendererState flags)
+		protected override void OnSnapshot (Gtk.Snapshot snapshot, Gtk.Widget widget, Gdk.Rectangle background_area, Gdk.Rectangle cell_area, CellRendererState flags)
 		{
 			if (image.IsNull)
 				return;
@@ -79,25 +79,37 @@ namespace Xwt.GtkBackend
 				};
 			}
 			var pix = ((GtkImage)img.Backend);
-			int x_offset, y_offset, width, height;
-			this.GetSize (widget, ref cell_area, out x_offset, out y_offset, out width, out height);
-			pix.Draw (Context, cr, Util.GetScaleFactor (widget), cell_area.X + x_offset, cell_area.Y + y_offset, img);
-
-		}
-
-		protected override void OnGetSize (Gtk.Widget widget, ref Gdk.Rectangle cell_area, out int x_offset, out int y_offset, out int width, out int height)
-		{
-			if (image.IsNull) {
-				width = height = 0;
-			} else {
-				width = (int) image.Size.Width;
-				height = (int) image.Size.Height;
-			}
+			int width = (int) image.Size.Width;
+			int height = (int) image.Size.Height;
+			int x_offset = 0, y_offset = 0;
 			if (!cell_area.IsEmpty && width > 0 && height > 0) {
 				x_offset = (int)Math.Max (0, Xalign * (cell_area.Width - width));
 				y_offset = (int)Math.Max (0, Yalign * (cell_area.Height - height));
-			} else
-				x_offset = y_offset = 0;
+			}
+			var bounds = Graphene.Rect.Alloc ();
+			bounds.Init (cell_area.X, cell_area.Y, cell_area.Width, cell_area.Height);
+			using (var cr = snapshot.AppendCairo (bounds))
+				pix.Draw (Context, cr, Util.GetScaleFactor (widget), cell_area.X + x_offset, cell_area.Y + y_offset, img);
+		}
+
+		protected override void OnGetPreferredWidth (Gtk.Widget widget, out int minimum_size, out int natural_size)
+		{
+			minimum_size = natural_size = image.IsNull ? 0 : (int) image.Size.Width;
+		}
+
+		protected override void OnGetPreferredWidthForHeight (Gtk.Widget widget, int height, out int minimum_width, out int natural_width)
+		{
+			OnGetPreferredWidth (widget, out minimum_width, out natural_width);
+		}
+
+		protected override void OnGetPreferredHeight (Gtk.Widget widget, out int minimum_size, out int natural_size)
+		{
+			minimum_size = natural_size = image.IsNull ? 0 : (int) image.Size.Height;
+		}
+
+		protected override void OnGetPreferredHeightForWidth (Gtk.Widget widget, int width, out int minimum_height, out int natural_height)
+		{
+			OnGetPreferredHeight (widget, out minimum_height, out natural_height);
 		}
 	}
 }

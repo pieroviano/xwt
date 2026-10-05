@@ -1,10 +1,10 @@
-//
-// GtkCustomRenderer.cs
+﻿//
+// GtkWin32Engine.cs
 //
 // Author:
-//       Vsevolod Kukol <v.kukol@rubologic.de>
+//       Lluis Sanchez Gual <lluis@xamarin.com>
 //
-// Copyright (c) 2014 Vsevolod Kukol
+// Copyright (c) 2014 Xamarin, Inc (http://www.xamarin.com)
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -24,22 +24,18 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
 using System;
+using Xwt.GtkBackend;
+using Xwt.Backends;
 
-namespace Xwt.GtkBackend
+namespace Xwt.Gtk.Windows
 {
-	public abstract class GtkCellRendererCustom : Gtk.CellRenderer
+	public class WindowsPlatformBackend: GtkPlatformBackend
 	{
-		[GLib.Property ("text")]
-		public string AccessibleText { get; set; }
-
-		public GtkCellRendererCustom()
+		public override void Initialize (Backends.ToolkitEngineBackend toolit)
 		{
-			// set default padding used by native renderers like Gtk.CellRendererText
-			// which is used by Gtk3 to determine the cell area position. This is required, because
-			// the background area is always 2-3px larger then the cell area. This is not the same
-			// offset used in OnGetSize which has to be 0 (!).
-			SetPadding (1, 0);
-			SetAlignment (0.0f, 0.0f);
+			base.Initialize (toolit);
+			toolit.RegisterBackend<DesktopBackend, GtkWindowsDesktopBackend> ();
+			toolit.RegisterBackend<IWebViewBackend, WebViewBackend> ();
 		}
 	}
 }

@@ -29,48 +29,58 @@ using Xwt.Drawing;
 
 namespace Xwt.GtkBackend
 {
+	/// <summary>
+	/// Color selection on <see cref="Gtk.ColorDialog"/>; the asynchronous GTK 4 dialog is waited for
+	/// in a nested main loop.
+	/// </summary>
 	public class SelectColorDialogBackend: ISelectColorDialogBackend
 	{
-		Gtk.ColorSelectionDialog dlg;
+		Gtk.ColorDialog dlg;
 		Color color;
 		string defaultTitle;
-		
+
 		public SelectColorDialogBackend ()
 		{
-			dlg = new Gtk.ColorSelectionDialog (null);
+			dlg = new Gtk.ColorDialog ();
+			dlg.Modal = true;
 			defaultTitle = dlg.Title;
 		}
 
 		#region ISelectColorDialogBackend implementation
 		public bool Run (IWindowFrameBackend parent, string title, bool supportsAlpha)
 		{
-			if (!String.IsNullOrEmpty (title))
-				dlg.Title = title;
-			else
-				dlg.Title = defaultTitle;
+			dlg.Title = !String.IsNullOrEmpty (title) ? title : defaultTitle;
+			dlg.WithAlpha = supportsAlpha;
 
-			dlg.ColorSelection.HasOpacityControl = supportsAlpha;
-			
-			dlg.ColorSelection.CurrentColor = color.ToGtkValue ();
-			if (supportsAlpha)
-				dlg.ColorSelection.CurrentAlpha = (ushort) (((double)ushort.MaxValue) * color.Alpha);
-		
 			var p = parent != null ? Toolkit.CurrentEngine.GetNativeWindow (parent) as Gtk.Window : null;
-			int result = MessageService.RunCustomDialog (dlg, p);
-			
-			if (result == (int) Gtk.ResponseType.Ok) {
-				color = dlg.ColorSelection.CurrentColor.ToXwtValue ();
-				if (supportsAlpha)
-					color = color.WithAlpha ((double)dlg.ColorSelection.CurrentAlpha / (double)ushort.MaxValue);
+			if (p == null)
+				p = MessageService.GetDefaultModalParent ();
+
+			bool selected = false;
+			Color result = color;
+			var loop = new NestedLoop ();
+			dlg.ChooseRgba (p, color.ToGtkRgbaValue (), null, (source, res, data) => {
+				try {
+					result = dlg.ChooseRgbaFinish (res).ToXwtValue ();
+					selected = true;
+				} catch (GLib.GException) {
+					// dismissed
+				} finally {
+					loop.Quit ();
+				}
+			});
+			loop.Run ();
+
+			if (selected) {
+				color = supportsAlpha ? result : result.WithAlpha (1);
 				return true;
 			}
-			else
-				return false;
+			return false;
 		}
 
 		public void Dispose ()
 		{
-			dlg.Destroy ();
+			dlg.Dispose ();
 		}
 
 		public Color Color {
@@ -81,8 +91,7 @@ namespace Xwt.GtkBackend
 				color = value;
 			}
 		}
-		
+
 		#endregion
 	}
 }
-

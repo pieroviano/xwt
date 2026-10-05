@@ -30,12 +30,11 @@ using Xwt.Drawing;
 
 namespace Xwt.GtkBackend
 {
-	public partial class TextEntryBackend : WidgetBackend, ITextEntryBackend
+	public class TextEntryBackend : WidgetBackend, ITextEntryBackend
 	{
 		public override void Initialize ()
 		{
 			Widget = new Gtk.Entry ();
-			Widget.Show ();
 		}
 
 		internal protected virtual Gtk.Entry TextEntry {
@@ -56,6 +55,11 @@ namespace Xwt.GtkBackend
 			set { Widget.Text = value ?? ""; } // null value causes GTK error
 		}
 
+		public string PlaceholderText {
+			get { return Widget.PlaceholderText; }
+			set { Widget.PlaceholderText = value; }
+		}
+
 		public Alignment TextAlignment {
 			get {
 				if (Widget.Xalign == 0)
@@ -71,16 +75,6 @@ namespace Xwt.GtkBackend
 				case Alignment.End: Widget.Xalign = 1; break;
 				case Alignment.Center: Widget.Xalign = 0.5f; break;
 				}
-			}
-		}
-
-		public override Color BackgroundColor {
-			get {
-				return base.BackgroundColor;
-			}
-			set {
-				base.BackgroundColor = value;
-				Widget.ModifyBase (Gtk.StateType.Normal, value.ToGtkValue ());
 			}
 		}
 
@@ -118,14 +112,12 @@ namespace Xwt.GtkBackend
 				return start;
 			}
 			set {
-				int cacheStart = SelectionStart;
 				int cacheLength = SelectionLength;
 				Widget.GrabFocus ();
 				if (String.IsNullOrEmpty (Text))
 					return;
+				// selection changes are reported through notify::cursor-position / notify::selection-bound
 				Widget.SelectRegion (value, value + cacheLength);
-				if (cacheStart != value)
-					HandleSelectionChanged ();
 			}
 		}
 
@@ -137,26 +129,19 @@ namespace Xwt.GtkBackend
 			}
 			set {
 				int cacheStart = SelectionStart;
-				int cacheLength = SelectionLength;
 				Widget.GrabFocus ();
 				if (String.IsNullOrEmpty (Text))
 					return;
 				Widget.SelectRegion (cacheStart, cacheStart + value);
-				if (cacheLength != value)
-					HandleSelectionChanged ();
 			}
 		}
 
 		public string SelectedText {
 			get {
-				int start = SelectionStart;
-				int end = start + SelectionLength;
-				if (start == end) return String.Empty;
-				try {
-					return Text.Substring (start, end - start);
-				} catch {
+				int start, end;
+				if (!Widget.GetSelectionBounds (out start, out end) || start == end)
 					return String.Empty;
-				}
+				return Widget.GetChars (start, end) ?? String.Empty;
 			}
 			set {
 				int cacheSelStart = SelectionStart;
@@ -164,10 +149,9 @@ namespace Xwt.GtkBackend
 				if (SelectionLength > 0) {
 					Widget.DeleteSelection ();
 				}
-				Widget.InsertText (value, ref pos);
+				Widget.InsertText (value ?? String.Empty, ref pos);
 				Widget.GrabFocus ();
 				Widget.SelectRegion (cacheSelStart, pos);
-				HandleSelectionChanged ();
 			}
 		}
 
@@ -223,6 +207,7 @@ namespace Xwt.GtkBackend
 
 		internal static Gtk.EntryCompletion CreateCompletion ()
 		{
+			// GTK 4: GtkEntryCompletion is deprecated (4.10) but still functional
 			return new Gtk.EntryCompletion () {
 				PopupCompletion = true,
 				TextColumn = 0,
@@ -239,11 +224,13 @@ namespace Xwt.GtkBackend
 				case TextEntryEvent.Changed: Widget.Changed += HandleChanged; break;
 				case TextEntryEvent.Activated: Widget.Activated += HandleActivated; break;
 				case TextEntryEvent.SelectionChanged:
-					enableSelectionChangedEvent = true;
-					Widget.MoveCursor += HandleMoveCursor;
-					Widget.ButtonPressEvent += HandleButtonPressEvent;
-					Widget.ButtonReleaseEvent += HandleButtonReleaseEvent;
-					Widget.MotionNotifyEvent += HandleMotionNotifyEvent;
+					if (!enableSelectionChangedEvent) {
+						enableSelectionChangedEvent = true;
+						cacheSelectionStart = SelectionStart;
+						cacheSelectionLength = SelectionLength;
+						Widget.AddNotification ("cursor-position", HandleSelectionNotify);
+						Widget.AddNotification ("selection-bound", HandleSelectionNotify);
+					}
 					break;
 				}
 			}
@@ -257,11 +244,11 @@ namespace Xwt.GtkBackend
 				case TextEntryEvent.Changed: Widget.Changed -= HandleChanged; break;
 				case TextEntryEvent.Activated: Widget.Activated -= HandleActivated; break;
 				case TextEntryEvent.SelectionChanged:
-					enableSelectionChangedEvent = false;
-					Widget.MoveCursor -= HandleMoveCursor;
-					Widget.ButtonPressEvent -= HandleButtonPressEvent;
-					Widget.ButtonReleaseEvent -= HandleButtonReleaseEvent;
-					Widget.MotionNotifyEvent -= HandleMotionNotifyEvent;
+					if (enableSelectionChangedEvent) {
+						enableSelectionChangedEvent = false;
+						Widget.RemoveNotification ("cursor-position", HandleSelectionNotify);
+						Widget.RemoveNotification ("selection-bound", HandleSelectionNotify);
+					}
 					break;
 				}
 			}
@@ -269,10 +256,7 @@ namespace Xwt.GtkBackend
 
 		void HandleChanged (object sender, EventArgs e)
 		{
-			ApplicationContext.InvokeUserCode (delegate {
-				EventSink.OnChanged ();
-				EventSink.OnSelectionChanged ();
-			});
+			ApplicationContext.InvokeUserCode (EventSink.OnChanged);
 		}
 
 		void HandleActivated (object sender, EventArgs e)
@@ -281,49 +265,17 @@ namespace Xwt.GtkBackend
 		}
 
 		bool enableSelectionChangedEvent;
-		void HandleSelectionChanged ()
-		{
-			if (enableSelectionChangedEvent)
-				ApplicationContext.InvokeUserCode (EventSink.OnSelectionChanged);
-		}
-
-		void HandleMoveCursor (object sender, EventArgs e)
-		{
-			HandleSelectionChanged ();
-		}
-
 		int cacheSelectionStart, cacheSelectionLength;
-		bool isMouseSelection;
 
-		[GLib.ConnectBefore]
-		void HandleButtonPressEvent (object o, Gtk.ButtonPressEventArgs args)
+		void HandleSelectionNotify (object o, GLib.NotifyArgs args)
 		{
-			if (args.Event.Button == 1) {
-				HandleSelectionChanged ();
-				cacheSelectionStart = SelectionStart;
-				cacheSelectionLength = SelectionLength;
-				isMouseSelection = true;
-			}
-		}
-
-		[GLib.ConnectBefore]
-		void HandleMotionNotifyEvent (object o, Gtk.MotionNotifyEventArgs args)
-		{
-			if (isMouseSelection)
-			if (cacheSelectionStart != SelectionStart || cacheSelectionLength != SelectionLength)
-				HandleSelectionChanged ();
-			cacheSelectionStart = SelectionStart;
-			cacheSelectionLength = SelectionLength;
-		}
-
-		[GLib.ConnectBefore]
-		void HandleButtonReleaseEvent (object o, Gtk.ButtonReleaseEventArgs args)
-		{
-			if (args.Event.Button == 1) {
-				isMouseSelection = false;
-				HandleSelectionChanged ();
-			}
+			// cursor-position and selection-bound are notified separately for a single change: report only real changes
+			int start = SelectionStart, length = SelectionLength;
+			if (start == cacheSelectionStart && length == cacheSelectionLength)
+				return;
+			cacheSelectionStart = start;
+			cacheSelectionLength = length;
+			ApplicationContext.InvokeUserCode (EventSink.OnSelectionChanged);
 		}
 	}
 }
-

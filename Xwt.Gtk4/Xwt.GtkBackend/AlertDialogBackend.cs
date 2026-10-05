@@ -62,7 +62,7 @@ namespace Xwt.GtkBackend
 		ApplicationContext context;
 
 		#region IAlertDialogBackend implementation
-		
+
 		public void Dispose ()
 		{
 		}
@@ -73,15 +73,20 @@ namespace Xwt.GtkBackend
 		}
 
 		public Command Run (WindowFrame transientFor, MessageDescription message)
-		{			
+		{
 			GtkAlertDialog alertDialog = new GtkAlertDialog (context, message);
-			alertDialog.FocusButton (message.DefaultButton);
-			var win = context.Toolkit.GetNativeWindow (transientFor) as Gtk.Window;
-			MessageService.ShowCustomDialog (alertDialog, win);
+			try {
+				alertDialog.FocusButton (message.DefaultButton);
+				var win = transientFor != null ? context.Toolkit.GetNativeWindow (transientFor) as Gtk.Window : null;
+				// runs until a button is clicked or the dialog is closed (both hide it)
+				MessageService.RunModal (alertDialog, win, new NestedLoop ());
+			} finally {
+				alertDialog.Destroy ();
+			}
 			if (alertDialog.ApplyToAll)
 				ApplyToAll = true;
 			var res = alertDialog.ResultButton;
-			
+
 			if (res == null) {
 				// If the dialog is closed clicking the close window button we may have no result.
 				// In that case, try to find a cancelling button
@@ -96,8 +101,7 @@ namespace Xwt.GtkBackend
 		}
 
 		public bool ApplyToAll { get; set; }
-		
+
 		#endregion
 	}
 }
-

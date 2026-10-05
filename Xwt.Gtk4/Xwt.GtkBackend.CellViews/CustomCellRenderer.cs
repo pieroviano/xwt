@@ -125,13 +125,16 @@ namespace Xwt.GtkBackend
 		public ICanvasCellViewFrontend CellView;
 		public CustomCellRenderer Parent;
 
-		protected override void OnRender (Cairo.Context cr, Gtk.Widget widget, Gdk.Rectangle background_area, Gdk.Rectangle cell_area, CellRendererState flags)
+		protected override void OnSnapshot (Gtk.Snapshot snapshot, Gtk.Widget widget, Gdk.Rectangle background_area, Gdk.Rectangle cell_area, CellRendererState flags)
 		{
-			int wx, wy, dx = 0, dy = 0;
+			// The tree view snapshots cells in bin window coordinates; Xwt cell bounds are
+			// widget coordinates, so the areas are shifted and the cairo context compensates.
+			int dx = 0, dy = 0;
+			var bounds = Graphene.Rect.Alloc ();
+			bounds.Init (background_area.X, background_area.Y, background_area.Width, background_area.Height);
 			var tree = widget as Gtk.TreeView;
-			// Tree coordinates must be converted to widget coordinates,
-			// otherwise custom cell bounds will have an offset to the parent widget
 			if (tree != null) {
+				int wx, wy;
 				tree.ConvertBinWindowToWidgetCoords (cell_area.X, cell_area.Y, out wx, out wy);
 				dx = wx - cell_area.X;
 				dy = wy - cell_area.Y;
@@ -142,28 +145,47 @@ namespace Xwt.GtkBackend
 			}
 
 			Parent.StartDrawing (new Rectangle (background_area.X, background_area.Y, background_area.Width, background_area.Height), new Rectangle (cell_area.X, cell_area.Y, cell_area.Width, cell_area.Height), flags);
+			var cr = snapshot.AppendCairo (bounds);
 			CellView.ApplicationContext.InvokeUserCode (delegate {
 				CairoContextBackend ctx = new CairoContextBackend (Util.GetScaleFactor (widget));
 				ctx.Context = cr;
-				ctx.Context.Translate(-dx, -dy);
+				ctx.Context.Translate (-dx, -dy);
 				using (ctx) {
 					CellView.Draw (ctx, new Rectangle (cell_area.X, cell_area.Y, cell_area.Width, cell_area.Height));
 				}
 			});
+			cr.Dispose ();
 			Parent.EndDrawing ();
 		}
 
-		protected override void OnGetSize (Gtk.Widget widget, ref Gdk.Rectangle cell_area, out int x_offset, out int y_offset, out int width, out int height)
+		Size GetRequiredSize (int width)
 		{
 			Size size = new Size ();
-			var widthConstraint = cell_area.Width > 0 ? SizeConstraint.WithSize(cell_area.Width) : SizeConstraint.Unconstrained;
+			var widthConstraint = width > 0 ? SizeConstraint.WithSize (width) : SizeConstraint.Unconstrained;
 			CellView.ApplicationContext.InvokeUserCode (delegate {
 				size = CellView.GetRequiredSize (widthConstraint);
 			});
-			width = (int) size.Width;
-			height = (int) size.Height;
-			x_offset = y_offset = 0;
+			return size;
+		}
+
+		protected override void OnGetPreferredWidth (Gtk.Widget widget, out int minimum_size, out int natural_size)
+		{
+			minimum_size = natural_size = (int) GetRequiredSize (-1).Width;
+		}
+
+		protected override void OnGetPreferredWidthForHeight (Gtk.Widget widget, int height, out int minimum_width, out int natural_width)
+		{
+			OnGetPreferredWidth (widget, out minimum_width, out natural_width);
+		}
+
+		protected override void OnGetPreferredHeight (Gtk.Widget widget, out int minimum_size, out int natural_size)
+		{
+			minimum_size = natural_size = (int) GetRequiredSize (-1).Height;
+		}
+
+		protected override void OnGetPreferredHeightForWidth (Gtk.Widget widget, int width, out int minimum_height, out int natural_height)
+		{
+			minimum_height = natural_height = (int) GetRequiredSize (width).Height;
 		}
 	}
 }
-

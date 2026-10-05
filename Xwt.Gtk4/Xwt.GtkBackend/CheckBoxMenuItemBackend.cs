@@ -23,16 +23,28 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 
 namespace Xwt.GtkBackend
 {
+	/// <summary>Check item: a boolean stateful action (rendered with a check mark by GTK).</summary>
 	public class CheckBoxMenuItemBackend: MenuItemBackend, ICheckBoxMenuItemBackend
 	{
-		public CheckBoxMenuItemBackend (): base (new Gtk.CheckMenuItem (""))
+		protected override GLib.SimpleAction CreateAction (string name)
 		{
+			return new GLib.SimpleAction (name, null, new GLib.Variant (false));
+		}
+
+		public override bool Checked {
+			get { return (bool) Action.State; }
+			set { Action.State = new GLib.Variant (value); }
+		}
+
+		protected override void OnActivated (GLib.Variant parameter)
+		{
+			Checked = !Checked;
 		}
 	}
 }
-

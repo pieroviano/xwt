@@ -31,8 +31,6 @@ namespace Xwt.GtkBackend
 {
 	public class ListViewBackend: TableViewBackend, IListViewBackend
 	{
-		bool showBorder;
-		
 		protected new IListViewEventSink EventSink {
 			get { return (IListViewEventSink)base.EventSink; }
 		}
@@ -135,21 +133,11 @@ namespace Xwt.GtkBackend
 
 		public bool BorderVisible {
 			get {
-				return ScrolledWindow.ShadowType == Gtk.ShadowType.In;
+				return ScrolledWindow.HasFrame;
 			}
 			set {
-				showBorder = value;
-				UpdateBorder ();
+				ScrolledWindow.HasFrame = value;
 			}
-		}
-		
-		void UpdateBorder ()
-		{
-			var shadowType = showBorder ? Gtk.ShadowType.In : Gtk.ShadowType.None;
-			if (ScrolledWindow.Child is Gtk.Viewport)
-				((Gtk.Viewport) ScrolledWindow.Child).ShadowType = shadowType;
-			else
-				ScrolledWindow.ShadowType = shadowType;
 		}
 		
 		public bool HeadersVisible {

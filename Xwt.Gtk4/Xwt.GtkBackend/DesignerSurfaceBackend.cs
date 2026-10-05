@@ -31,50 +31,33 @@ namespace Xwt.GtkBackend
 {
 	public class DesignerSurfaceBackend: WidgetBackend, IDesignerSurfaceBackend
 	{
-		Gtk.EventBox box;
+		DesignerBox box;
 		
 		public DesignerSurfaceBackend ()
 		{
 			box = new DesignerBox ();
-			box.Show ();
 			Widget = box;
 		}
 		
 		public void Load (Widget w)
 		{
 			var wb = (IGtkWidgetBackend) Toolkit.GetBackend (w);
-			box.Add (wb.Widget);
+			box.Child = wb.Widget;
 		}
 	}
 	
-	class DesignerBox: Gtk.EventBox
+	/// <summary>
+	/// Shows the designed widget with an empty input-catching surface on top of it.
+	/// </summary>
+	class DesignerBox: Gtk.Overlay
 	{
-		Gtk.EventBox surface;
+		Gtk.Widget surface;
 		
 		public DesignerBox ()
 		{
-			this.FixContainerLeak ();
-
-			surface = new Gtk.EventBox ();
-			surface.ShowAll ();
-			surface.VisibleWindow = false;
-			surface.Parent = this;
-		}
-		
-		protected override void OnSizeAllocated (Gdk.Rectangle allocation)
-		{
-			base.OnSizeAllocated (allocation);
-			// Gtk2 Allocation setter simply calls SizeAllocate, so use this directly like with Gtk3
-			surface.SizeAllocate (new Gdk.Rectangle (0,0, allocation.Width, allocation.Height));
-		}
-
-		
-		protected override void ForAll (bool include_internals, Gtk.Callback callback)
-		{
-			base.ForAll (include_internals, callback);
-			callback (surface);
+			// an empty widget covering the whole content (overlay children fill by default)
+			surface = new Gtk.Box (Gtk.Orientation.Horizontal, 0);
+			AddOverlay (surface);
 		}
 	}
-		
 }
-

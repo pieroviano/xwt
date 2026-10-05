@@ -59,11 +59,13 @@ namespace Xwt.GtkBackend
 
 		protected override void Dispose(bool disposing)
 		{
-			source.RowChanged -= HandleRowChanged;
-			source.RowDeleted -= HandleRowDeleted;
-			source.RowInserted -= HandleRowInserted;
-			source.RowsReordered -= HandleRowsReordered;
-			base.Dispose();
+			if (disposing && source != null) {
+				source.RowChanged -= HandleRowChanged;
+				source.RowDeleted -= HandleRowDeleted;
+				source.RowInserted -= HandleRowInserted;
+				source.RowsReordered -= HandleRowsReordered;
+			}
+			base.Dispose (disposing);
 		}
 
 		void HandleRowsReordered (object sender, ListRowOrderEventArgs e)

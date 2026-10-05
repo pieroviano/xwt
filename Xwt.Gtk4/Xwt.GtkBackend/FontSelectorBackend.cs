@@ -25,7 +25,6 @@
 // THE SOFTWARE.
 using System;
 using Xwt.Backends;
-using System.Runtime.InteropServices;
 
 namespace Xwt.GtkBackend
 {
@@ -37,12 +36,12 @@ namespace Xwt.GtkBackend
 
 		public override void Initialize ()
 		{
-			Widget = new GtkFontSelection ();
-			base.Widget.Show ();
+			// GTK 4: GtkFontSelection is gone; GtkFontChooserWidget (deprecated 4.10, present) is the inline selector
+			Widget = new Gtk.FontChooserWidget ();
 		}
 
-		protected new GtkFontSelection Widget {
-			get { return (GtkFontSelection)base.Widget; }
+		protected new Gtk.FontChooserWidget Widget {
+			get { return (Gtk.FontChooserWidget)base.Widget; }
 			set { base.Widget = value; }
 		}
 
@@ -55,7 +54,7 @@ namespace Xwt.GtkBackend
 			base.EnableEvent (eventId);
 			if (eventId is FontSelectorEvent) {
 				switch ((FontSelectorEvent)eventId) {
-					case FontSelectorEvent.FontChanged: Widget.FontChanged += HandleFontChanged; break;
+					case FontSelectorEvent.FontChanged: Widget.AddNotification ("font", HandleFontChanged); break;
 				}
 			}
 		}
@@ -65,22 +64,22 @@ namespace Xwt.GtkBackend
 			base.DisableEvent (eventId);
 			if (eventId is FontSelectorEvent) {
 				switch ((FontSelectorEvent)eventId) {
-					case FontSelectorEvent.FontChanged: Widget.FontChanged -= HandleFontChanged; break;
+					case FontSelectorEvent.FontChanged: Widget.RemoveNotification ("font", HandleFontChanged); break;
 				}
 			}
 		}
 
-		void HandleFontChanged (object sender, EventArgs e)
+		void HandleFontChanged (object sender, GLib.NotifyArgs e)
 		{
 			ApplicationContext.InvokeUserCode (EventSink.OnFontChanged);
 		}
 
 		public Xwt.Drawing.Font SelectedFont {
 			get {
-				return Xwt.Drawing.Font.FromName (Widget.FontName);
+				return Xwt.Drawing.Font.FromName (Widget.Font);
 			}
 			set {
-				Widget.FontName = value.ToString ();
+				Widget.Font = value.ToString ();
 			}
 		}
 
@@ -89,42 +88,4 @@ namespace Xwt.GtkBackend
 			set { Widget.PreviewText = value; }
 		}
 	}
-
-	public class GtkFontSelection: Gtk.FontSelection
-	{
-		public event EventHandler FontChanged;
-
-		public GtkFontSelection()
-		{
-			// there is no special font changed event
-			// check whether the font changed on every redraw of the preview entry
-			var entry = GetPreviewEntry();
-			entry.Drawn += HandleExposeEvent;
-		}
-
-		string cachedFontName = String.Empty;
-		void HandleExposeEvent (object o, EventArgs args)
-		{
-			if (cachedFontName !=  FontName) {
-				cachedFontName = FontName;
-				if (FontChanged != null)
-					FontChanged (this, new EventArgs ());
-			}
-		}
-
-		[DllImport (GtkInterop.LIBGTK, CallingConvention = CallingConvention.Cdecl)]
-		private static extern IntPtr gtk_font_selection_get_preview_entry (IntPtr raw);
-
-		Gtk.Entry GetPreviewEntry ()
-		{
-			IntPtr intPtr = gtk_font_selection_get_preview_entry (base.Handle);
-			Gtk.Entry result;
-			if (intPtr == IntPtr.Zero)
-				result = null;
-			else
-				result = (Gtk.Entry)GLib.Object.GetObject (intPtr);
-			return result;
-		}
-	}
 }
-

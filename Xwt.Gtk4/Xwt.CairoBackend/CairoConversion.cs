@@ -35,14 +35,6 @@ namespace Xwt.CairoBackend
 			return new Cairo.Color (col.Red, col.Green, col.Blue, col.Alpha);
 		}
 		
-		public static Cairo.Color ToCairoColor (this Gdk.Color color)
-		{
-			return new Cairo.Color(
-				(double)(color.Red >> 8) / 255.0,
-				(double)(color.Green >> 8) / 255.0,
-				(double)(color.Blue >> 8) / 255.0);
-		}
-
 		public static Cairo.Color ToCairoColor (this Gdk.RGBA color)
 		{
 			return new Cairo.Color (color.Red, color.Green, color.Blue, color.Alpha);

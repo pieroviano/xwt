@@ -49,7 +49,7 @@ namespace Xwt.GtkBackend
 				cellRenderer.Text = tx.Text;
 				var atts = new FastPangoAttrList ();
 				atts.AddAttributes (new TextIndexer (tx.Text), tx.Attributes);
-				cellRenderer.Attributes = new Pango.AttrList (atts.Handle);
+				cellRenderer.Attributes = atts.List;
 				atts.Dispose ();
 				mixedMarkupText = true;
 			} else {

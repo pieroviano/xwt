@@ -25,11 +25,14 @@
 // THE SOFTWARE.
 
 using System;
-
+using System.Linq;
 using Xwt.Backends;
 
 namespace Xwt.GtkBackend
 {
+	/// <summary>
+	/// A row of joined buttons: a homogeneous Gtk.Box with the "linked" style class.
+	/// </summary>
 	public class SegmentedButtonBackend : WidgetBackend, ISegmentedButtonBackend
 	{
 		public SegmentedButtonBackend ()
@@ -38,30 +41,56 @@ namespace Xwt.GtkBackend
 
 		public override void Initialize ()
 		{
-			Widget = new CustomHButtonBox ();
-			Widget.LayoutStyle = Gtk.ButtonBoxStyle.Start;
-			base.Widget.Show ();
+			var box = new Gtk.Box (Gtk.Orientation.Horizontal, 0);
+			box.Homogeneous = true;
+			box.AddCssClass ("linked");
+			Widget = box;
 		}
-		
-		protected new Gtk.HButtonBox Widget {
-			get { return (Gtk.HButtonBox)base.Widget; }
+
+		protected new Gtk.Box Widget {
+			get { return (Gtk.Box)base.Widget; }
 			set { base.Widget = value; }
+		}
+
+		static Gtk.Widget GetButtonWidget (Button button)
+		{
+			return ((WidgetBackend)Toolkit.GetBackend (button)).RootWidget;
+		}
+
+		Gtk.Widget GetChildAt (int index)
+		{
+			return index >= 0 ? Widget.GetChildren ().ElementAtOrDefault (index) : null;
 		}
 
 		public void AddChildButton (int index, Button button)
 		{
-			// TODO: support index
-			Widget.Add ((Gtk.Widget)((WidgetBackend)Toolkit.GetBackend (button)).NativeWidget);
+			var w = GetButtonWidget (button);
+			var sibling = GetChildAt (index - 1);
+			if (index <= 0)
+				Widget.Prepend (w);
+			else if (sibling != null)
+				Widget.InsertChildAfter (w, sibling);
+			else
+				Widget.Append (w);
 		}
 
 		public void RemoveChildButton (int index)
 		{
-			Widget.Remove (Widget.Children [index]);
+			var w = GetChildAt (index);
+			if (w != null)
+				Widget.Remove (w);
 		}
 
 		public void ReplaceChildButton (int index, Button newButton)
 		{
-			// TODO
+			var old = GetChildAt (index);
+			var w = GetButtonWidget (newButton);
+			if (old == null) {
+				Widget.Append (w);
+				return;
+			}
+			Widget.InsertChildAfter (w, old);
+			Widget.Remove (old);
 		}
 
 		public int Spacing {
@@ -72,40 +101,5 @@ namespace Xwt.GtkBackend
 				Widget.Spacing = value;
 			}
 		}
-
-		public class CustomHButtonBox : Gtk.HButtonBox
-		{
-			// The default implementation of HButtonBox don't pay attention
-			// to its allocation for its child buttons using instead the size
-			// they request. Change that
-			protected override void OnSizeAllocated (Gdk.Rectangle allocation)
-			{
-				base.OnSizeAllocated (allocation);
-
-				var children = Children;
-				if (children.Length == 0)
-					return;
-
-				int childHeight = (int)(allocation.Height - 2 * BorderWidth);
-				int childWidth = (allocation.Width - Spacing * (children.Length - 1)) / children.Length;
-				int x = (int)(allocation.X + BorderWidth);
-				int y = allocation.Y + (allocation.Height - childHeight) / 2;
-				var childAllocation = new Gdk.Rectangle ();
-				childAllocation.Width = childWidth;
-				childAllocation.Height = childHeight;
-
-				foreach (var child in Children) {
-					if (!child.Visible)
-						continue;
-
-					childAllocation.Y = y;
-					childAllocation.X = x;
-					x += childWidth + Spacing;
-
-					child.SizeAllocate (childAllocation);
-				}
-			}
-		}
 	}
 }
-

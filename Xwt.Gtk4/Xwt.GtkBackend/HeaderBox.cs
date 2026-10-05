@@ -23,39 +23,72 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
-using Gtk;
 using Xwt.Drawing;
 using Xwt.CairoBackend;
 
 namespace Xwt.GtkBackend
 {
-	class HeaderBox: HeaderBoxGtk
+	/// <summary>
+	/// Single-child container drawing a border of configurable widths/colour and an optional background,
+	/// with the child allocated inside the border and the padding.
+	/// </summary>
+	class HeaderBox: ContainerWidget
 	{
 		Gtk.Widget child;
 		int topMargin;
 		int bottomMargin;
 		int leftMargin;
 		int rightMargin;
-		
+
 		int topPadding;
 		int bottomPadding;
 		int leftPadding;
 		int rightPadding;
-		
+
 		Color? color;
-		
+		Color? backgroundColor;
+		bool gradientBackground;
+
 		public HeaderBox ()
 		{
 		}
-		
+
 		public HeaderBox (IntPtr p): base (p)
 		{
 		}
-		
+
 		public HeaderBox (int topMargin, int bottomMargin, int leftMargin, int rightMargin)
 		{
 			SetMargins (topMargin, bottomMargin, leftMargin, rightMargin);
+		}
+
+		public Gtk.Widget Child {
+			get { return child; }
+			set {
+				if (child == value)
+					return;
+				if (child != null && child.Parent == this)
+					base.RemoveChild (child);
+				child = value;
+				if (child != null)
+					AddChild (child);
+			}
+		}
+
+		public override void RemoveChild (Gtk.Widget w)
+		{
+			if (w == child)
+				child = null;
+			base.RemoveChild (w);
+		}
+
+		public override void ReplaceChild (Gtk.Widget oldWidget, Gtk.Widget newWidget)
+		{
+			if (oldWidget == child)
+				child = newWidget;
+			base.ReplaceChild (oldWidget, newWidget);
 		}
 
 		public void SetBorderColor (Color color)
@@ -63,94 +96,130 @@ namespace Xwt.GtkBackend
 			this.color = color;
 			QueueDraw ();
 		}
-		
+
 		public void SetMargins (int topMargin, int bottomMargin, int leftMargin, int rightMargin)
 		{
 			this.topMargin = topMargin;
 			this.bottomMargin = bottomMargin;
 			this.leftMargin = leftMargin;
 			this.rightMargin = rightMargin;
+			QueueResize ();
 		}
-		
+
 		public void SetPadding (int topPadding, int bottomPadding, int leftPadding, int rightPadding)
 		{
 			this.topPadding = topPadding;
 			this.bottomPadding = bottomPadding;
 			this.leftPadding = leftPadding;
 			this.rightPadding = rightPadding;
-		}
-		
-		public bool GradientBackround { get; set; }
-		public Color? BackgroundColor { get; set; }
-
-		protected override void OnAdded (Gtk.Widget widget)
-		{
-			base.OnAdded (widget);
-			child = widget;
+			QueueResize ();
 		}
 
-		protected override void OnSizeRequested (ref Requisition requisition)
+		public bool GradientBackround {
+			get { return gradientBackground; }
+			set { gradientBackground = value; QueueDraw (); }
+		}
+
+		public Color? BackgroundColor {
+			get { return backgroundColor; }
+			set { backgroundColor = value; QueueDraw (); }
+		}
+
+		int HorizontalExtra {
+			get { return leftMargin + rightMargin + leftPadding + rightPadding; }
+		}
+
+		int VerticalExtra {
+			get { return topMargin + bottomMargin + topPadding + bottomPadding; }
+		}
+
+		protected override Gtk.SizeRequestMode OnGetRequestMode ()
 		{
-			if (child != null) {
-				requisition = child.SizeRequest ();
-				requisition.Width += leftMargin + rightMargin + leftPadding + rightPadding;
-				requisition.Height += topMargin + bottomMargin + topPadding + bottomPadding;
+			return child != null ? child.RequestMode : Gtk.SizeRequestMode.ConstantSize;
+		}
+
+		protected override void OnMeasure (Gtk.Orientation orientation, int for_size, out int minimum, out int natural, out int minimum_baseline, out int natural_baseline)
+		{
+			minimum_baseline = natural_baseline = -1;
+			int extra = orientation == Gtk.Orientation.Horizontal ? HorizontalExtra : VerticalExtra;
+			if (child != null && child.Visible) {
+				int otherExtra = orientation == Gtk.Orientation.Horizontal ? VerticalExtra : HorizontalExtra;
+				int childForSize = for_size >= 0 ? Math.Max (0, for_size - otherExtra) : -1;
+				int mb, nb;
+				child.Measure (orientation, childForSize, out minimum, out natural, out mb, out nb);
+				minimum += extra;
+				natural += extra;
 			} else {
-				requisition.Width = 0;
-				requisition.Height = 0;
+				minimum = natural = extra;
 			}
 		}
 
-		protected override void OnSizeAllocated (Gdk.Rectangle allocation)
+		protected override void OnSizeAllocate (int width, int height, int baseline)
 		{
-			base.OnSizeAllocated (allocation);
-			if (allocation.Width > leftMargin + rightMargin + leftPadding + rightPadding) {
-				allocation.X += leftMargin + leftPadding;
-				allocation.Width -= leftMargin + rightMargin + leftPadding + rightPadding;
+			if (child == null || !child.Visible)
+				return;
+			int x = 0, y = 0;
+			if (width > HorizontalExtra) {
+				x = leftMargin + leftPadding;
+				width -= HorizontalExtra;
 			}
-			if (allocation.Height > topMargin + bottomMargin + topPadding + bottomPadding) {
-				allocation.Y += topMargin + topPadding;
-				allocation.Height -= topMargin + bottomMargin + topPadding + bottomPadding;
+			if (height > VerticalExtra) {
+				y = topMargin + topPadding;
+				height -= VerticalExtra;
 			}
-			if (child != null)
-				child.SizeAllocate (allocation);
+			child.SizeAllocate (new Gdk.Rectangle (x, y, width, height), -1);
 		}
 
-		protected override void OnDrawn (Cairo.Context cr, Gdk.Rectangle rect)
+		Color GetDefaultBorderColor ()
 		{
-			if (BackgroundColor.HasValue) {
-				cr.Rectangle (rect.X, rect.Y, rect.Width, rect.Height);
-				cr.SetSourceColor (BackgroundColor.Value.ToCairoColor ());
+			Gdk.RGBA c;
+			if (StyleContext.LookupColor ("borders", out c))
+				return c.ToXwtValue ();
+			return new Color (0.5, 0.5, 0.5);
+		}
+
+		protected override void OnSnapshot (Gtk.Snapshot snapshot)
+		{
+			int width = Width, height = Height;
+			if (width > 0 && height > 0) {
+				var bounds = Graphene.Rect.Alloc ();
+				bounds.Init (0, 0, width, height);
+				using (var cr = snapshot.AppendCairo (bounds))
+					Draw (cr, width, height);
+			}
+			// children
+			base.OnSnapshot (snapshot);
+		}
+
+		void Draw (Cairo.Context cr, int width, int height)
+		{
+			if (backgroundColor.HasValue) {
+				cr.Rectangle (0, 0, width, height);
+				cr.SetSourceColor (backgroundColor.Value.ToCairoColor ());
 				cr.Fill ();
 			}
-		
-			if (GradientBackround) {
-				Color gcol = Style.Background (Gtk.StateType.Normal).ToXwtValue ();
-			
+
+			if (gradientBackground) {
+				Color gcol = this.GetBackgroundColor ();
 				cr.NewPath ();
-				cr.MoveTo (rect.X, rect.Y);
-				cr.RelLineTo (rect.Width, 0);
-				cr.RelLineTo (0, rect.Height);
-				cr.RelLineTo (-rect.Width, 0);
-				cr.RelLineTo (0, -rect.Height);
-				cr.ClosePath ();
-				using (var pat = new Cairo.LinearGradient (rect.X, rect.Y, rect.X, rect.Bottom)) {
-					Cairo.Color color1 = gcol.ToCairoColor ();
-					pat.AddColorStop (0, color1);
+				cr.Rectangle (0, 0, width, height);
+				using (var pat = new Cairo.LinearGradient (0, 0, 0, height)) {
+					pat.AddColorStop (0, gcol.ToCairoColor ());
 					gcol.Light -= 0.1;
 					pat.AddColorStop (1, gcol.ToCairoColor ());
 					cr.SetSource (pat);
-					cr.FillPreserve ();
+					cr.Fill ();
 				}
 			}
-		
-			cr.SetSourceColor (color.HasValue ? color.Value.ToCairoColor () : Style.Dark (Gtk.StateType.Normal).ToXwtValue ().ToCairoColor ());
-			cr.Rectangle (rect.X, rect.Y, rect.Width, topMargin);
-			cr.Rectangle (rect.X, rect.Y + rect.Height - bottomMargin, rect.Width, bottomMargin);
-			cr.Rectangle (rect.X, rect.Y, leftMargin, rect.Height);
-			cr.Rectangle (rect.X + rect.Width - rightMargin, rect.Y, rightMargin, rect.Height);
+
+			if (topMargin + bottomMargin + leftMargin + rightMargin == 0)
+				return;
+			cr.SetSourceColor ((color ?? GetDefaultBorderColor ()).ToCairoColor ());
+			cr.Rectangle (0, 0, width, topMargin);
+			cr.Rectangle (0, height - bottomMargin, width, bottomMargin);
+			cr.Rectangle (0, 0, leftMargin, height);
+			cr.Rectangle (width - rightMargin, 0, rightMargin, height);
 			cr.Fill ();
 		}
 	}
 }
-

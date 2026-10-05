@@ -90,8 +90,7 @@ namespace Xwt.GtkBackend
 		public void SetRange (double lowerValue, double upperValue, double pageSize, double pageIncrement, double stepIncrement, double value)
 		{
 			this.lowerValue = lowerValue;
-			adjustment.SetBounds (0, upperValue - lowerValue, stepIncrement, pageIncrement, pageSize);
-			Value = value;
+			adjustment.Configure (value - lowerValue, 0, upperValue - lowerValue, stepIncrement, pageIncrement, pageSize);
 		}
 
 		public double Value {

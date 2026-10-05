@@ -73,10 +73,10 @@ namespace Xwt.GtkBackend
 					Widget.RowActivated -= HandleRowActivated;
 					break;
 				case TreeViewEvent.RowExpanding:
-					Widget.TestExpandRow -= HandleTestExpandRow;;
+					Widget.TestExpandRow -= HandleTestExpandRow;
 					break;
 				case TreeViewEvent.RowExpanded:
-					Widget.RowExpanded -= HandleRowExpanded;;
+					Widget.RowExpanded -= HandleRowExpanded;
 					break;
 				case TreeViewEvent.RowCollapsing:
 					Widget.TestCollapseRow -= HandleTestCollapseRow;
@@ -143,37 +143,29 @@ namespace Xwt.GtkBackend
 			}
 		}
 		
-		protected override void OnSetDragTarget (Gtk.TargetEntry[] table, Gdk.DragAction actions)
+		// GTK 4: the foundation's DragSource / DropTargetAsync controllers handle drag and drop;
+		// the tree view's own model DnD (EnableModelDragSource/Dest) is not enabled, since it would
+		// install competing controllers. The destination row is highlighted manually.
+
+		protected override void OnSetDragStatus (Gdk.Drop drop, int x, int y, Gdk.DragAction action)
 		{
-			base.OnSetDragTarget (table, actions);
-			Widget.EnableModelDragDest (table, actions);
-		}
-		
-		protected override void OnSetDragSource (Gdk.ModifierType modifierType, Gtk.TargetEntry[] table, Gdk.DragAction actions)
-		{
-			base.OnSetDragSource (modifierType, table, actions);
-			Widget.EnableModelDragSource (modifierType, table, actions);
-		}
-		
-		protected override void OnSetDragStatus (Gdk.DragContext context, int x, int y, uint time, Gdk.DragAction action)
-		{
-			base.OnSetDragStatus (context, x, y, time, action);
-			
-			// We are overriding the TreeView methods for handling drag & drop, so we need
-			// to manually highlight the selected row
-			
+			base.OnSetDragStatus (drop, x, y, action);
+
 			Gtk.TreeViewDropPosition tpos;
 			Gtk.TreePath path;
 			if (!Widget.GetDestRowAtPos (x, y, out path, out tpos))
 				path = null;
-			
-			if (expandTimer == 0 || !object.Equals (autoExpandPath, path)) {
-				if (expandTimer != 0)
+
+			if (expandTimer == 0 || !SamePath (autoExpandPath, path)) {
+				if (expandTimer != 0) {
 					GLib.Source.Remove (expandTimer);
+					expandTimer = 0;
+				}
 				if (path != null) {
+					var expandPath = path;
 					expandTimer = GLib.Timeout.Add (600, delegate {
 						expandTimer = 0;
-						Widget.ExpandRow (path, false);
+						Widget.ExpandRow (expandPath, false);
 						return false;
 					});
 				}
@@ -185,11 +177,31 @@ namespace Xwt.GtkBackend
 			else
 				Widget.SetDragDestRow (null, 0);
 		}
+
+		protected override void OnDragLeave ()
+		{
+			base.OnDragLeave ();
+			if (expandTimer != 0) {
+				GLib.Source.Remove (expandTimer);
+				expandTimer = 0;
+			}
+			autoExpandPath = null;
+			Widget.SetDragDestRow (null, 0);
+		}
+
+		static bool SamePath (Gtk.TreePath p1, Gtk.TreePath p2)
+		{
+			if (p1 == null || p2 == null)
+				return p1 == p2;
+			return p1.Compare (p2) == 0;
+		}
 		
 		protected override void Dispose (bool disposing)
 		{
-			if (expandTimer != 0)
+			if (expandTimer != 0) {
 				GLib.Source.Remove (expandTimer);
+				expandTimer = 0;
+			}
 			base.Dispose (disposing);
 		}
 		
@@ -285,10 +297,10 @@ namespace Xwt.GtkBackend
 
 		public bool BorderVisible {
 			get {
-				return ScrolledWindow.ShadowType != Gtk.ShadowType.None;
+				return ScrolledWindow.HasFrame;
 			}
 			set {
-				ScrolledWindow.ShadowType = value ? Gtk.ShadowType.In : Gtk.ShadowType.None;
+				ScrolledWindow.HasFrame = value;
 			}
 		}
 
@@ -303,10 +315,10 @@ namespace Xwt.GtkBackend
 
 		public bool UseAlternatingRowColors {
 			get {
-				return Widget.RulesHint;
+				return AlternatingRowColors;
 			}
 			set {
-				Widget.RulesHint = value;
+				AlternatingRowColors = value;
 			}
 		}
 		

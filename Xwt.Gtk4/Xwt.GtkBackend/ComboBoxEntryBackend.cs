@@ -59,7 +59,7 @@ namespace Xwt.GtkBackend
 		
 		protected override Gtk.Widget CreateWidget ()
 		{
-			var c = GtkWorkarounds.CreateComboBoxEntry ();
+			var c = Gtk.ComboBox.NewWithEntry ();
 			entryBackend = new CustomComboEntryBackend ((Gtk.Entry)c.Child);
 			return c;
 		}
@@ -77,12 +77,10 @@ namespace Xwt.GtkBackend
 		static void SyncCompletionColumn (Gtk.EntryCompletion completion, int textColumn)
 		{
 			if (completion.TextColumn != textColumn) {
-				// Gtk.EntryCompletion.TextColumn is using gtk_entry_completion_set_text_column
-				// which will create a new Cell on each change. Since we don't want this "convenience",
-				// we need to use the "text_column" property instead, as suggested in
-				// https://developer.gnome.org/gtk2/stable/GtkEntryCompletion.html#gtk-entry-completion-set-text-column
-				using (GLib.Value val = new GLib.Value(textColumn)) {
-					completion.SetProperty("text_column", val);
+				// gtk_entry_completion_set_text_column creates a new cell on each change; setting
+				// the "text-column" property directly avoids that.
+				using (GLib.Value val = new GLib.Value (textColumn)) {
+					completion.SetProperty ("text-column", val);
 				}
 			}
 		}
@@ -98,7 +96,7 @@ namespace Xwt.GtkBackend
 		public void SetTextColumn (int column)
 		{
 			textColumn = column;
-			Widget.SetTextColumn (column);
+			Widget.EntryTextColumn = column;
 			if (Completes)
 				SyncCompletionColumn (entryBackend.TextEntry.Completion, textColumn);
 		}
@@ -112,7 +110,7 @@ namespace Xwt.GtkBackend
 		protected override void OnSetBackgroundColor (Xwt.Drawing.Color color)
 		{
 			Widget.SetBackgroundColor (color);
-			Widget.SetChildBackgroundColor (color);
+			Widget.Child?.SetBackgroundColor (color);
 		}
 	}
 	
@@ -127,7 +125,7 @@ namespace Xwt.GtkBackend
 		
 		public override void Initialize ()
 		{
-			TextEntry.Show ();
+			// the entry is created by the combo box
 		}
 	}
 }

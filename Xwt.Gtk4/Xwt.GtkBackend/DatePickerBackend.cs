@@ -29,6 +29,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Xwt.Backends;
 
 
@@ -39,7 +40,6 @@ namespace Xwt.GtkBackend
 		public override void Initialize ()
 		{
 			Widget = new GtkDatePickerEntry ();
-			Widget.ShowAll ();
 		}
 		
 		new GtkDatePickerEntry Widget {
@@ -110,7 +110,13 @@ namespace Xwt.GtkBackend
 			ApplicationContext.InvokeUserCode (EventSink.ValueChanged);
 		}
 		
-		public class GtkDatePickerEntry : Gtk.SpinButton
+		/// <summary>
+		/// Date/time entry: a Gtk.SpinButton whose text shows the formatted date and whose
+		/// components (day, month, year, hour…) are selected and edited individually.
+		/// GTK 4: GtkSpinButton has no overridable vfuncs any more, so this is a Gtk.Box
+		/// hosting the spin button and driving it through its signals and event controllers.
+		/// </summary>
+		public class GtkDatePickerEntry : Gtk.Box
 		{
 			static string[] styleFormats = new string[3];
 
@@ -123,17 +129,25 @@ namespace Xwt.GtkBackend
 				styleFormats[(int)DatePickerStyle.DateTime] = styleFormats[(int)DatePickerStyle.Date] + " " + styleFormats[(int)DatePickerStyle.Time];
 			}
 
+			readonly Gtk.SpinButton spin;
 			Dictionary<DateTimeComponent, int> componentPosition = new Dictionary<DateTimeComponent, int>();
 			Dictionary<DateTimeComponent, int> componentLength = new Dictionary<DateTimeComponent, int>();
 			List<DateTimeComponent> componentsSorted = new List<DateTimeComponent>();
-			
-			public new EventHandler ValueChanged;
+
+			public EventHandler ValueChanged;
 
 			DateTimeComponent selectedComponent = DateTimeComponent.None;
 
-			GtkClipboardBackend clipboard = new GtkClipboardBackend();
-
 			DateTime currentValue = DateTime.MinValue;
+
+			/// <summary>The spin button that displays and edits the value.</summary>
+			public Gtk.SpinButton SpinButton {
+				get { return spin; }
+			}
+
+			Gtk.Adjustment Adjustment {
+				get { return spin.Adjustment; }
+			}
 
 			public DateTime DateTime {
 				get {
@@ -201,23 +215,47 @@ namespace Xwt.GtkBackend
 
 					componentsSorted = componentPosition.OrderBy (k => k.Value).Select (k => k.Key).ToList ();
 
-					WidthChars = format.Length;
+					spin.WidthChars = format.Length;
+					spin.Update ();
 				}
 			}
 
 			public GtkDatePickerEntry () : this (DatePickerStyle.DateTime)
 			{
 			}
-	
-			public GtkDatePickerEntry (DatePickerStyle style) : base (DateTime.MinValue.Ticks,
-			                                                          DateTime.MaxValue.Ticks,
-			                                                          TimeSpan.TicksPerSecond)
+
+			public GtkDatePickerEntry (DatePickerStyle style)
 			{
+				spin = new Gtk.SpinButton (DateTime.MinValue.Ticks, DateTime.MaxValue.Ticks, TimeSpan.TicksPerSecond);
+				spin.Hexpand = true;
+				spin.Numeric = false;
+				Append (spin);
+
+				spin.Output += HandleOutput;
+				ConnectInput ();
+				spin.Changed += HandleTextChanged;
+
+				var focus = new Gtk.EventControllerFocus ();
+				focus.Enter += HandleFocusEnter;
+				focus.Leave += HandleFocusLeave;
+				spin.AddController (focus);
+
+				var click = new Gtk.GestureClick ();
+				click.Button = 1;
+				click.PropagationPhase = Gtk.PropagationPhase.Capture;
+				click.Pressed += HandlePressed;
+				spin.AddController (click);
+
+				var keys = new Gtk.EventControllerKey ();
+				keys.PropagationPhase = Gtk.PropagationPhase.Capture;
+				keys.KeyPressed += HandleKeyPressed;
+				keys.KeyReleased += HandleKeyReleased;
+				spin.AddController (keys);
+
 				DatePickerStyle = style;
 
 				Adjustment.PageIncrement = TimeSpan.TicksPerDay;
-				IsEditable = true;
-				HasFrame = true;
+				spin.IsEditable = true;
 				DateTime = DateTime.Now;
 				Adjustment.ValueChanged += HandleValueChanged;
 			}
@@ -236,128 +274,161 @@ namespace Xwt.GtkBackend
 					DateTime = currentValue.AddComponent (selectedComponent, -1);
 			}
 
-			protected override void OnDestroyed()
-			{
-				Adjustment.ValueChanged -= HandleValueChanged;
-				base.OnDestroyed();
-			}
-
-			protected override int OnOutput ()
+			void HandleOutput (object o, Gtk.OutputArgs args)
 			{
 				DateTime dateTime = new DateTime ((long)Adjustment.Value);
 				string format = styleFormats [(int)DatePickerStyle];
 
-				Text = dateTime.ToString (format);
-				return 1;
-			}
-			
-			protected override int OnInput (out double new_value)
-			{
-				new_value = Adjustment.Value;
-				return 1;
+				spin.Text = dateTime.ToString (format);
+				args.RetVal = true;
 			}
 
-			protected override void OnFocusGrabbed ()
+			// GtkSharp4 binds the "input" signal's gdouble* out parameter as a set-only IntPtr, so the
+			// signal is connected natively: the text is never parsed, the value only changes through
+			// component editing.
+			[UnmanagedFunctionPointer (CallingConvention.Cdecl)]
+			delegate int InputCallback (IntPtr spinButton, IntPtr newValue, IntPtr data);
+			[UnmanagedFunctionPointer (CallingConvention.Cdecl)]
+			delegate void DestroyCallback (IntPtr data, IntPtr closure);
+			[UnmanagedFunctionPointer (CallingConvention.Cdecl)]
+			delegate IntPtr d_g_signal_connect_data (IntPtr instance, IntPtr detailed_signal, IntPtr handler, IntPtr data, IntPtr destroy_data, int connect_flags);
+
+			static readonly d_g_signal_connect_data g_signal_connect_data = GtkInterop.LoadFunction<d_g_signal_connect_data> (NativeLib.GObject, "g_signal_connect_data");
+			static readonly InputCallback inputCallback = OnInput;
+			static readonly DestroyCallback destroyCallback = OnInputDestroyed;
+
+			void ConnectInput ()
 			{
-				base.OnFocusGrabbed ();
-				// Override default GTK behavior which is to select the whole entry
-				SelectComponent (selectedComponent);
+				if (g_signal_connect_data == null)
+					return;
+				var data = GCHandle.ToIntPtr (GCHandle.Alloc (this, GCHandleType.Weak));
+				var signal = GLib.Marshaller.StringToPtrGStrdup ("input");
+				g_signal_connect_data (spin.Handle, signal, Marshal.GetFunctionPointerForDelegate (inputCallback), data,
+					Marshal.GetFunctionPointerForDelegate (destroyCallback), 0);
+				GLib.Marshaller.Free (signal);
 			}
 
-			protected override bool OnFocusOutEvent (Gdk.EventFocus evnt)
+			static int OnInput (IntPtr spinButton, IntPtr newValue, IntPtr data)
+			{
+				try {
+					var entry = GCHandle.FromIntPtr (data).Target as GtkDatePickerEntry;
+					if (entry == null)
+						return 0;
+					Marshal.Copy (new [] { entry.Adjustment.Value }, 0, newValue, 1);
+					return 1;
+				} catch (Exception ex) {
+					GLib.ExceptionManager.RaiseUnhandledException (ex, false);
+					return 0;
+				}
+			}
+
+			static void OnInputDestroyed (IntPtr data, IntPtr closure)
+			{
+				GCHandle.FromIntPtr (data).Free ();
+			}
+
+			void HandleFocusEnter (object sender, EventArgs e)
+			{
+				// Override default GTK behavior which is to select the whole entry on focus;
+				// deferred because GtkText selects on focus after the controllers run
+				GLib.Idle.Add (delegate {
+					if (spin.Handle != IntPtr.Zero)
+						SelectComponent (selectedComponent);
+					return false;
+				});
+			}
+
+			void HandleFocusLeave (object sender, EventArgs e)
 			{
 				SelectComponent (DateTimeComponent.None);
-				return base.OnFocusOutEvent (evnt);
 			}
 
-			protected override void OnChanged ()
+			void HandleTextChanged (object sender, EventArgs e)
 			{
-				base.OnChanged ();
 				SelectComponent (selectedComponent);
 			}
 
-			protected override void OnClipboardPasted ()
+			void PasteFromClipboard ()
 			{
-				if (clipboard.IsTypeAvailable(TransferDataType.Text)) {
-					var newText = clipboard.GetData(TransferDataType.Text) as string;
+				// GTK 4: the clipboard is read asynchronously
+				var clipboard = spin.Clipboard;
+				clipboard.ReadTextAsync (null, (source, res, data) => {
+					string newText;
+					try {
+						newText = clipboard.ReadTextFinish (res);
+					} catch (GLib.GException) {
+						return;
+					}
+					if (newText == null)
+						return;
 					DateTime newDateTime;
 					if (DateTime.TryParse (newText, out newDateTime))
 						DateTime = newDateTime;
-					else  if (componentLength.ContainsKey (selectedComponent) 
-					          && componentLength[selectedComponent] == newText.Length) {
-
-						try {
-							var value = int.Parse (newText);
-							DateTime = DateTime.SetComponent (selectedComponent, value);
-						} catch {
+					else if (componentLength.ContainsKey (selectedComponent)
+					         && componentLength[selectedComponent] == newText.Length) {
+						int value;
+						if (!int.TryParse (newText, out value))
 							return;
+						try {
+							DateTime = DateTime.SetComponent (selectedComponent, value);
+						} catch (ArgumentOutOfRangeException) {
 						}
 					}
-				}
+				});
 			}
 
-			Gdk.Window entryWindow;
-			Gdk.Window EntryWindow {
-				get {
-					if (entryWindow == null) {
-						// Problem: base.GdkWindow is the parent window and this widgets windows
-						// (3: entry + two spin buttons) are children of the parent, which may hold
-						// other windows of its children (e.g. container).
-						// 
-						// Workaround: find child windows inside own allocation and select the first
-						// window from the left, which is the window holding the text entry of the
-						// spin button.
-						entryWindow = GdkWindow.Children
-							// get child window geometry
-							.Select(childw => {
-									int x, y, w, h;
-									childw.GetGeometry (out x, out y, out w, out h);
-									return new KeyValuePair<Gdk.Window, Gdk.Rectangle> (childw, new Gdk.Rectangle (x, y, w, h));
-								})
-							// select windows inside own allocation
-							.Where(k => Allocation.Contains (k.Value))
-							// order by X location from the left
-							.OrderBy (k => k.Value.X)
-							// select first window or null if failed
-							.FirstOrDefault ().Key;
-					}
-					return entryWindow;
-				}
-			}
-			
-			protected override bool OnButtonPressEvent (Gdk.EventButton evnt)
+			Gtk.Widget GetTextChild ()
 			{
-				// handle left click only
-				if (evnt.Button != 1)
-					return base.OnButtonPressEvent (evnt);
+				for (var c = spin.FirstChild; c != null; c = c.NextSibling)
+					if (c is Gtk.TextWidget)
+						return c;
+				return null;
+			}
 
-				// a spin button has 3 windows (entry + 2 buttons), handle this event only for the window
-				// containing the text entry widget
-				if (evnt.Window != EntryWindow)
-					return base.OnButtonPressEvent (evnt);
+			void HandlePressed (object o, Gtk.PressedArgs args)
+			{
+				// handle clicks on the text part only (the +/- buttons are separate children)
+				var text = GetTextChild ();
+				var target = spin.Pick (args.X, args.Y, Gtk.PickFlags.Default);
+				if (text == null || target == null || (target != text && !target.IsAncestor (text)))
+					return;
 
-				int layoutX, layoutY;
-				GetLayoutOffsets (out layoutX, out layoutY);
-				int index, trailing;
-				bool insideLayout = Layout.XyToIndex (Pango.Units.FromPixels ((int)evnt.X),
-				                                      Pango.Units.FromPixels ((int)evnt.Y),
-				                                      out index,
-				                                      out trailing);
+				double tx, ty;
+				if (!spin.TranslateCoordinates (text, args.X, args.Y, out tx, out ty))
+					return;
+
+				// GTK 4: GtkText does not expose its layout offsets; the date text is short and never scrolls
+				var str = spin.Text ?? String.Empty;
+				int index = 0, trailing;
+				bool insideLayout;
+				var layout = text.CreatePangoLayout (str);
+				int lw, lh;
+				layout.GetPixelSize (out lw, out lh);
+				insideLayout = tx >= 0 && tx <= lw &&
+					layout.XyToIndex (Pango.Units.FromPixels ((int)tx), Pango.Units.FromPixels (lh / 2), out index, out trailing);
+				layout.Dispose ();
 
 				if (insideLayout) {
-					SelectComponentAtPosition (TextIndexToLayoutIndex (index));
-					GrabFocus ();
-					return false;
+					var bytes = System.Text.Encoding.UTF8.GetBytes (str);
+					var charIndex = System.Text.Encoding.UTF8.GetCharCount (bytes, 0, Math.Min (index, bytes.Length));
+					SelectComponentAtPosition (charIndex);
+					((Gtk.GestureClick)o).SetState (Gtk.EventSequenceState.Claimed);
+					if (!text.HasFocus)
+						spin.GrabFocus ();
+					return;
 				}
 				SelectComponent (DateTimeComponent.None);
-				return base.OnButtonPressEvent (evnt);
 			}
 
 			int currentDigitInsert;
-			protected override bool OnKeyReleaseEvent (Gdk.EventKey evnt)
-			{
-				char pressedKey = (char)Gdk.Keyval.ToUnicode (evnt.KeyValue);
 
+			void HandleKeyReleased (object o, Gtk.KeyReleasedArgs args)
+			{
+				HandleKeyReleased ((char)Gdk.Keyval.ToUnicode (args.Keyval));
+			}
+
+			void HandleKeyReleased (char pressedKey)
+			{
 				if (char.IsWhiteSpace(pressedKey) || char.IsPunctuation (pressedKey) || char.IsSeparator (pressedKey)) {
 					if (pressedKey != '\t') // exclude tab
 						SelectNextComponent ();
@@ -375,16 +446,14 @@ namespace Xwt.GtkBackend
 						DateTime = current;
 					} catch (ArgumentOutOfRangeException) {
 						if (pressedKey == '0')
-							return true;
+							return;
 						if (currentDigitInsert != 0) {
 							// In case date wasn't representable we redo the call with an updated digit insert
 							currentDigitInsert = 0;
-							return OnKeyReleaseEvent (evnt);
+							HandleKeyReleased (pressedKey);
 						}
-						return true;
 					}
 				}
-				return base.OnKeyReleaseEvent (evnt);
 			}
 
 			int AddDigitToValue (int baseValue, char newValue)
@@ -393,28 +462,35 @@ namespace Xwt.GtkBackend
 					return int.Parse (newValue.ToString ());
 				return int.Parse (baseValue.ToString () + newValue);
 			}
-	
-			protected override bool OnKeyPressEvent (Gdk.EventKey evnt)
-			{
 
-				if (evnt.Key == Gdk.Key.Left || evnt.Key == Gdk.Key.KP_Left) {
+			void HandleKeyPressed (object o, Gtk.KeyPressedArgs args)
+			{
+				var key = (Gdk.Key)args.Keyval;
+				if (key == Gdk.Key.Left || key == Gdk.Key.KP_Left) {
 					SelectPrevComponent ();
-					return true;
+					args.RetVal = true;
+					return;
 				}
 
-				if (evnt.Key == Gdk.Key.Right || evnt.Key == Gdk.Key.KP_Right) {
+				if (key == Gdk.Key.Right || key == Gdk.Key.KP_Right) {
 					SelectNextComponent ();
-					return true;
+					args.RetVal = true;
+					return;
+				}
+
+				var xwtModifiers = args.State.ToXwtValue ();
+				if ((key == Gdk.Key.v || key == Gdk.Key.V) && xwtModifiers.HasFlag (ModifierKeys.Control)) {
+					// GTK 4: GtkText's paste-clipboard is not reachable from the spin button; paste is intercepted here
+					PasteFromClipboard ();
+					args.RetVal = true;
+					return;
 				}
 
 				// We only allow the keypress to proceed to the normal handler
 				// if it doesn't involve adding an actual character
 				// (i.e. navigation keys)
-				uint value = Gdk.Keyval.ToUnicode (evnt.KeyValue);
-				var xwtModifiers = evnt.State.ToXwtValue ();
-				if (value == 0 || value == '\t' || xwtModifiers.HasFlag(ModifierKeys.Control) || xwtModifiers.HasFlag (ModifierKeys.Alt))
-					return base.OnKeyPressEvent (evnt);
-				return true;
+				uint value = Gdk.Keyval.ToUnicode (args.Keyval);
+				args.RetVal = !(value == 0 || value == '\t' || xwtModifiers.HasFlag (ModifierKeys.Control) || xwtModifiers.HasFlag (ModifierKeys.Alt));
 			}
 
 			void SelectComponentAtPosition (int characterIndex)
@@ -435,10 +511,10 @@ namespace Xwt.GtkBackend
 					startPos = componentPosition[component];
 					endPos = startPos + componentLength[component];
 				} else {
-					startPos = CursorPosition;
-					endPos = CursorPosition;
+					startPos = spin.Position;
+					endPos = spin.Position;
 				}
-				SelectRegion (startPos, endPos);
+				spin.SelectRegion (startPos, endPos);
 
 				if (selectedComponent != component) {
 					selectedComponent = component;
@@ -456,7 +532,7 @@ namespace Xwt.GtkBackend
 
 				int startPos = componentPosition[selectedComponent];
 				int endPos = startPos + componentLength[selectedComponent];
-				SelectRegion (startPos, endPos);
+				spin.SelectRegion (startPos, endPos);
 				currentDigitInsert = 0;
 			}
 
@@ -470,10 +546,10 @@ namespace Xwt.GtkBackend
 
 				int startPos = componentPosition[selectedComponent];
 				int endPos = startPos + componentLength[selectedComponent];
-				SelectRegion (startPos, endPos);
+				spin.SelectRegion (startPos, endPos);
 				currentDigitInsert = 0;
 			}
-			
+
 			void RaiseChangedEvent ()
 			{
 				var tmp = ValueChanged;

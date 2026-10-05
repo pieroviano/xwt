@@ -36,12 +36,13 @@ namespace Xwt.GtkBackend
 
 		public override void Initialize ()
 		{
-			Widget = new Gtk.ColorSelection ();
-			base.Widget.Show ();
+			// GTK 4: GtkColorSelection is gone; GtkColorChooserWidget in editor mode is the inline equivalent
+			Widget = new Gtk.ColorChooserWidget ();
+			Widget.ShowEditor = true;
 		}
 
-		protected new Gtk.ColorSelection Widget {
-			get { return (Gtk.ColorSelection)base.Widget; }
+		protected new Gtk.ColorChooserWidget Widget {
+			get { return (Gtk.ColorChooserWidget)base.Widget; }
 			set { base.Widget = value; }
 		}
 
@@ -54,7 +55,7 @@ namespace Xwt.GtkBackend
 			base.EnableEvent (eventId);
 			if (eventId is ColorSelectorEvent) {
 				switch ((ColorSelectorEvent)eventId) {
-					case ColorSelectorEvent.ColorChanged: Widget.ColorChanged += HandleColorChanged;; break;
+					case ColorSelectorEvent.ColorChanged: Widget.AddNotification ("rgba", HandleColorChanged); break;
 				}
 			}
 		}
@@ -64,12 +65,12 @@ namespace Xwt.GtkBackend
 			base.DisableEvent (eventId);
 			if (eventId is ColorSelectorEvent) {
 				switch ((ColorSelectorEvent)eventId) {
-					case ColorSelectorEvent.ColorChanged: Widget.ColorChanged -= HandleColorChanged; break;
+					case ColorSelectorEvent.ColorChanged: Widget.RemoveNotification ("rgba", HandleColorChanged); break;
 				}
 			}
 		}
 
-		void HandleColorChanged (object sender, EventArgs e)
+		void HandleColorChanged (object sender, GLib.NotifyArgs e)
 		{
 			ApplicationContext.InvokeUserCode (EventSink.OnColorChanged);
 		}
@@ -85,23 +86,20 @@ namespace Xwt.GtkBackend
 
 		public Xwt.Drawing.Color Color {
 			get {
-				var xwtColor = Widget.CurrentColor.ToXwtValue ();
-				return xwtColor.WithAlpha ((double)Widget.CurrentAlpha / (double)ushort.MaxValue);
+				return Widget.Rgba.ToXwtValue ();
 			}
 			set {
-				Widget.CurrentColor = value.ToGtkValue ();
-				Widget.CurrentAlpha = (ushort)((int)(value.Alpha * 255) << 8 | (int)(value.Alpha * 255));
+				Widget.SetRgba (value.ToGtkRgbaValue ());
 			}
 		}
 
 		public bool SupportsAlpha {
 			get {
-				return Widget.HasOpacityControl;
+				return Widget.UseAlpha;
 			}
 			set {
-				Widget.HasOpacityControl = value;
+				Widget.UseAlpha = value;
 			}
 		}
 	}
 }
-

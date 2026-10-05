@@ -23,16 +23,17 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 
 namespace Xwt.GtkBackend
 {
+	/// <summary>GTK 4 menu models have no separator items: the parent menu splits its items into sections.</summary>
 	public class SeparatorMenuItemBackend: MenuItemBackend, ISeparatorMenuItemBackend
 	{
-		public SeparatorMenuItemBackend (): base (new Gtk.SeparatorMenuItem ())
-		{
+		internal override bool IsSeparator {
+			get { return true; }
 		}
 	}
 }
-

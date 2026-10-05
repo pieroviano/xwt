@@ -23,14 +23,22 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 
 namespace Xwt.GtkBackend
 {
+	/// <summary>
+	/// GTK 4 has no radio button class: a Gtk.CheckButton joined to a group (gtk_check_button_set_group)
+	/// is drawn and behaves as a radio button.
+	/// </summary>
 	public class RadioButtonBackend: WidgetBackend, IRadioButtonBackend
 	{
 		RadioGroup radioGroup;
+		bool internalActiveUpdate;
+		bool toggledEnabled;
+		bool clickedEnabled;
 
 		public RadioButtonBackend ()
 		{
@@ -38,106 +46,80 @@ namespace Xwt.GtkBackend
 
 		public override void Initialize ()
 		{
-			NeedsEventBox = false;
-			Widget = new Gtk.RadioButton ("");
-			Widget.Show ();
+			Widget = new Gtk.CheckButton ();
+			Widget.Toggled += HandleToggled;
+			// a check button is drawn as a radio only when it belongs to a group
+			Group = new RadioGroup () { Leader = Widget };
 		}
 
-		protected new Gtk.RadioButton Widget {
-			get { return (Gtk.RadioButton)base.Widget; }
+		protected new Gtk.CheckButton Widget {
+			get { return (Gtk.CheckButton)base.Widget; }
 			set { base.Widget = value; }
 		}
-		
+
 		protected new IRadioButtonEventSink EventSink {
 			get { return (IRadioButtonEventSink)base.EventSink; }
 		}
-		
-		
-		public override object Font {
-			get {
-				return base.Font;
-			}
-			set {
-				var fd = (Pango.FontDescription) value;
-				foreach (var c in Widget.Children)
-					c.ModifyFont (fd);
-			}
-		}
 
-		protected override void OnSetBackgroundColor (Xwt.Drawing.Color color)
-		{
-			base.OnSetBackgroundColor (color);
-			Widget.SetBackgroundColor (color);
-			Widget.SetChildBackgroundColor (color);
-			EventsRootWidget.SetBackgroundColor (color);
-		}
-		
 		public override void EnableEvent (object eventId)
 		{
 			base.EnableEvent (eventId);
 			if (eventId is RadioButtonEvent) {
 				switch ((RadioButtonEvent)eventId) {
-				case RadioButtonEvent.ActiveChanged: Widget.Toggled += HandleToggled; break;
-				case RadioButtonEvent.Clicked: Widget.Clicked += HandleClicked;; break;
+				case RadioButtonEvent.ActiveChanged: toggledEnabled = true; break;
+				case RadioButtonEvent.Clicked: clickedEnabled = true; break;
 				}
 			}
 		}
 
 		public override void DisableEvent (object eventId)
 		{
+			base.DisableEvent (eventId);
 			if (eventId is RadioButtonEvent) {
 				switch ((RadioButtonEvent)eventId) {
-				case RadioButtonEvent.ActiveChanged: Widget.Toggled -= HandleToggled; break;
-				case RadioButtonEvent.Clicked: Widget.Clicked -= HandleClicked;; break;
+				case RadioButtonEvent.ActiveChanged: toggledEnabled = false; break;
+				case RadioButtonEvent.Clicked: clickedEnabled = false; break;
 				}
 			}
 		}
-		
-		void HandleClicked (object sender, EventArgs e)
-		{
-			ApplicationContext.InvokeUserCode (EventSink.OnClicked);
-		}
-		
+
 		void HandleToggled (object sender, EventArgs e)
 		{
-			ApplicationContext.InvokeUserCode (EventSink.OnToggled);
+			if (toggledEnabled)
+				ApplicationContext.InvokeUserCode (EventSink.OnToggled);
+			// GTK 4: Gtk.CheckButton has no "clicked" signal; a non-programmatic activation is a click
+			if (clickedEnabled && !internalActiveUpdate && Widget.Active)
+				ApplicationContext.InvokeUserCode (EventSink.OnClicked);
 		}
 
 		#region IRadioButtonBackend implementation
 
-
 		public void SetContent (IWidgetBackend widget)
 		{
-			var w = (WidgetBackend)widget;
-			if (Widget.Children.Length > 0)
-				Widget.Remove (Widget.Children [0]);
-
-			if (w != null)
-				Widget.Add (w.Widget);
+			RemoveChildPlacement (Widget.Child);
+			Widget.Child = widget != null ? GetWidgetWithPlacement (widget) : null;
 		}
 
 		public void SetContent (string label)
 		{
+			RemoveChildPlacement (Widget.Child);
 			Widget.Label = label;
 		}
 
 		class RadioGroup
 		{
-			public Gtk.RadioButton Group;
-			public Gtk.RadioButton NullRadio;
+			public Gtk.CheckButton Leader;
 		}
 
 		public object Group {
 			get {
-				if (radioGroup == null)
-					radioGroup = new RadioGroup () { Group = Widget };
 				return radioGroup;
 			}
 			set {
 				var g = (RadioGroup)value;
 				if (g != radioGroup) {
-					Widget.Group = g.Group.Group;
 					radioGroup = g;
+					Widget.Group = g.Leader != Widget ? g.Leader : null;
 				}
 			}
 		}
@@ -147,17 +129,13 @@ namespace Xwt.GtkBackend
 				return Widget.Active;
 			}
 			set {
-				if (Widget.Active && !value) {
-					var g = (RadioGroup) Group;
-					if (g.NullRadio == null)
-						g.NullRadio = new Gtk.RadioButton (g.Group);
-					g.NullRadio.Active = true;
-				} else
-					Widget.Active = value;
+				// GTK 4 allows a grouped check button to be deactivated, leaving no active item
+				internalActiveUpdate = true;
+				Widget.Active = value;
+				internalActiveUpdate = false;
 			}
 		}
 
 		#endregion
 	}
 }
-

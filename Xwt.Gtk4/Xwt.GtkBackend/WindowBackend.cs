@@ -24,46 +24,49 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-
 using System;
 using Xwt.Backends;
-using Xwt.CairoBackend;
 using Xwt.Drawing;
 
 namespace Xwt.GtkBackend
 {
 	public class WindowBackend: WindowFrameBackend, IWindowBackend, IConstraintProvider
 	{
-		Gtk.Alignment alignment;
-		Gtk.MenuBar mainMenu;
-		Gtk.VBox mainBox;
-		
+		RootWindowAlignment alignment;
+		Gtk.PopoverMenuBar mainMenu;
+		Gtk.Box mainBox;
+
 		public override void Initialize ()
 		{
-			Window = new Gtk.Window ("");
-			Window.Add (CreateMainLayout ());
+			Window = new Gtk.Window ();
+			Window.Child = CreateMainLayout ();
 		}
-		
+
+		/// <summary>
+		/// Creates the window content: a vertical box holding the optional menu bar and the
+		/// alignment that hosts the Xwt content.
+		/// </summary>
 		protected virtual Gtk.Widget CreateMainLayout ()
 		{
-			mainBox = new Gtk.VBox ();
-			mainBox.Show ();
+			mainBox = new Gtk.Box (Gtk.Orientation.Vertical, 0);
 			alignment = new RootWindowAlignment (this);
-			mainBox.PackStart (alignment, true, true, 0);
-			alignment.Show ();
+			alignment.Hexpand = alignment.Vexpand = true;
+			mainBox.Append (alignment);
 			return mainBox;
 		}
-		
-		public Gtk.VBox MainBox {
+
+		public Gtk.Box MainBox {
 			get { return mainBox; }
 		}
 
 		public override void GetMetrics (out Size minSize, out Size decorationSize)
 		{
 			if (mainMenu != null) {
-				var ms = mainMenu.SizeRequest ();
-				minSize = new Size (ms.Width, 0);
-				decorationSize = new Size (0, ms.Height);
+				int minW, natW, minH, natH, b1, b2;
+				mainMenu.Measure (Gtk.Orientation.Horizontal, -1, out minW, out natW, out b1, out b2);
+				mainMenu.Measure (Gtk.Orientation.Vertical, -1, out minH, out natH, out b1, out b2);
+				minSize = new Size (minW, 0);
+				decorationSize = new Size (0, natH);
 			}
 			else {
 				minSize = decorationSize = Size.Zero;
@@ -72,13 +75,11 @@ namespace Xwt.GtkBackend
 
 		public void SetChild (IWidgetBackend child)
 		{
-			if (alignment.Child != null) {
+			if (alignment.Child != null)
 				WidgetBackend.RemoveChildPlacement (alignment.Child);
-				alignment.Remove (alignment.Child);
-			}
-			alignment.Child = WidgetBackend.GetWidgetWithPlacement (child);
+			alignment.Child = child != null ? WidgetBackend.GetWidgetWithPlacement (child) : null;
 		}
-		
+
 		public virtual void UpdateChildPlacement (IWidgetBackend childBackend)
 		{
 			WidgetBackend.SetChildPlacement (childBackend);
@@ -86,24 +87,25 @@ namespace Xwt.GtkBackend
 
 		public void SetMainMenu (IMenuBackend menu)
 		{
-			if (mainMenu != null)
+			if (mainMenu != null) {
 				mainBox.Remove (mainMenu);
-			
-			if (menu != null) {
-				MenuBackend m = (MenuBackend) menu;
-				mainMenu = m.MenuBar;
-				mainBox.PackStart (mainMenu, false, false, 0);
-				((Gtk.Box.BoxChild)mainBox[mainMenu]).Position = 0;
-			} else
 				mainMenu = null;
+			}
+
+			if (menu != null) {
+				var m = (MenuBackend) menu;
+				mainMenu = m.CreateMenuBar ();
+				m.InsertActions (Window);
+				mainBox.Prepend (mainMenu);
+			}
 		}
 
 		public void SetPadding (double left, double top, double right, double bottom)
 		{
-			alignment.LeftPadding = (uint) left;
-			alignment.RightPadding = (uint) right;
-			alignment.TopPadding = (uint) top;
-			alignment.BottomPadding = (uint) bottom;
+			alignment.MarginStart = (int) left;
+			alignment.MarginEnd = (int) right;
+			alignment.MarginTop = (int) top;
+			alignment.MarginBottom = (int) bottom;
 		}
 
 		public void SetMinSize (Size s)
@@ -117,7 +119,7 @@ namespace Xwt.GtkBackend
 			if (alignment.Child != null)
 				alignment.Child.QueueResize ();
 		}
-		
+
 		public void GetConstraints (Gtk.Widget target, out SizeConstraint width, out SizeConstraint height)
 		{
 			width = RequestedSize.Width;
@@ -132,20 +134,51 @@ namespace Xwt.GtkBackend
 			}
 			set {
 				backgroundColor = value;
-				if (Window is GtkPopoverWindow)
-					((GtkPopoverWindow)Window).BackgroundColor = value.ToCairoColor ();
 				Window.SetBackgroundColor (value);
 			}
 		}
 	}
 
-	class RootWindowAlignment: Gtk.Alignment, IConstraintProvider
+	/// <summary>
+	/// Single-child container hosting the window content; provides the window size as constraint
+	/// to the content. Its margins are the window padding.
+	/// </summary>
+	class RootWindowAlignment: ContainerWidget, IConstraintProvider
 	{
 		WindowBackend backend;
+		Gtk.Widget child;
 
-		public RootWindowAlignment (WindowBackend backend): base (0, 0, 1, 1)
+		public RootWindowAlignment (WindowBackend backend)
 		{
 			this.backend = backend;
+			LayoutManager = new Gtk.BinLayout ();
+		}
+
+		public Gtk.Widget Child {
+			get { return child; }
+			set {
+				if (child == value)
+					return;
+				if (child != null)
+					RemoveChild (child);
+				child = value;
+				if (child != null)
+					AddChild (child);
+			}
+		}
+
+		public override void RemoveChild (Gtk.Widget w)
+		{
+			if (w == child)
+				child = null;
+			base.RemoveChild (w);
+		}
+
+		public override void ReplaceChild (Gtk.Widget oldWidget, Gtk.Widget newWidget)
+		{
+			if (oldWidget == child)
+				child = newWidget;
+			base.ReplaceChild (oldWidget, newWidget);
 		}
 
 		public void GetConstraints (Gtk.Widget target, out SizeConstraint width, out SizeConstraint height)
@@ -154,4 +187,3 @@ namespace Xwt.GtkBackend
 		}
 	}
 }
-

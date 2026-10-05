@@ -36,23 +36,35 @@ namespace Xwt.GtkBackend
 		DialogButton[] dialogButtons;
 		DialogButton defaultButton;
 		Gtk.Button[] buttons;
-		
+		Gtk.Box actionArea;
+		NestedLoop runLoop;
+
 		public DialogBackend ()
 		{
 		}
-		
+
 		public override void Initialize ()
 		{
-			Window = new Gtk.Dialog ();
-			Window.AddContent (CreateMainLayout ());
-			Window.ActionArea.Hide ();
+			// GTK 4: GtkDialog is deprecated; the dialog is a window with its own button row.
+			Window = new Gtk.Window ();
+			var box = new Gtk.Box (Gtk.Orientation.Vertical, 0);
+			var content = CreateMainLayout ();
+			content.Vexpand = true;
+			box.Append (content);
+			actionArea = new Gtk.Box (Gtk.Orientation.Horizontal, 6);
+			actionArea.Halign = Gtk.Align.End;
+			actionArea.MarginStart = actionArea.MarginEnd = actionArea.MarginTop = actionArea.MarginBottom = 6;
+			actionArea.AddCssClass ("dialog-action-area");
+			actionArea.Visible = false;
+			box.Append (actionArea);
+			Window.Child = box;
 		}
-		
-		new Gtk.Dialog Window {
-			get { return (Gtk.Dialog) base.Window; }
-			set { base.Window = value; }
+
+		/// <summary>The box holding the dialog buttons.</summary>
+		public Gtk.Box ActionArea {
+			get { return actionArea; }
 		}
-		
+
 		new IDialogEventSink EventSink {
 			get { return (IDialogEventSink) base.EventSink; }
 		}
@@ -71,27 +83,25 @@ namespace Xwt.GtkBackend
 		{
 			if (buttons != null) {
 				foreach (var b in buttons) {
-					((Gtk.Container)b.Parent).Remove (b);
-					b.Destroy ();
+					b.Clicked -= HandleButtonClicked;
+					actionArea.Remove (b);
 				}
 			}
-			dialogButtons = newButtons
+			dialogButtons = (newButtons ?? Enumerable.Empty<DialogButton> ())
 				.OrderBy (b => b.PackOrigin)
 				.OrderBy (b => b == DefaultButton).ToArray ();
 			buttons = new Gtk.Button [dialogButtons.Length];
-			
+
 			for (int n=0; n<dialogButtons.Length; n++) {
 				var db = dialogButtons[n];
 				Gtk.Button b = new Gtk.Button ();
-				b.Show ();
-				b.Label = db.Label;
-				Window.ActionArea.Add (b);
+				actionArea.Append (b);
 				UpdateButton (db, b);
 				buttons[n] = b;
 				buttons[n].Clicked += HandleButtonClicked;
 				if (db == DefaultButton) {
-					b.CanDefault = true;
-					b.GrabDefault ();
+					Window.DefaultWidget = b;
+					b.AddCssClass ("suggested-action");
 				}
 			}
 			UpdateActionAreaVisibility ();
@@ -99,31 +109,30 @@ namespace Xwt.GtkBackend
 
 		void UpdateActionAreaVisibility ()
 		{
-			Window.ActionArea.Visible = Window.ActionArea.Children.Any (c => c.Visible);
+			actionArea.Visible = buttons != null && buttons.Any (c => c.Visible);
 		}
-		
+
 		void UpdateButton (DialogButton btn, Gtk.Button b)
 		{
 			if (!string.IsNullOrEmpty (btn.Label) && btn.Image == null) {
 				b.Label = btn.Label;
 			} else if (string.IsNullOrEmpty (btn.Label) && btn.Image != null) {
 				var pix = btn.Image.ToImageDescription (ApplicationContext);
-				b.Image = new ImageBox (ApplicationContext, pix);
+				b.Child = new ImageBox (ApplicationContext, pix);
 			} else if (!string.IsNullOrEmpty (btn.Label)) {
-				Gtk.Box box = new Gtk.HBox (false, 3);
+				Gtk.Box box = new Gtk.Box (Gtk.Orientation.Horizontal, 3);
 				var pix = btn.Image.ToImageDescription (ApplicationContext);
-				box.PackStart (new ImageBox (ApplicationContext, pix), false, false, 0);
-				box.PackStart (new Gtk.Label (btn.Label), true, true, 0);
-				b.Image = box;
+				box.Append (new ImageBox (ApplicationContext, pix));
+				var label = new Gtk.Label (btn.Label);
+				label.Hexpand = true;
+				box.Append (label);
+				b.Child = box;
 			}
-			if (btn.Visible)
-				b.ShowAll ();
-			else
-				b.Hide ();
+			b.Visible = btn.Visible;
 			b.Sensitive = btn.Sensitive;
 			UpdateActionAreaVisibility ();
 		}
-		
+
 		void HandleButtonClicked (object o, EventArgs a)
 		{
 			int i = Array.IndexOf (buttons, (Gtk.Button) o);
@@ -138,32 +147,43 @@ namespace Xwt.GtkBackend
 			UpdateButton (btn, buttons[i]);
 		}
 
+		/// <summary>
+		/// Shows the dialog modal to <paramref name="parent"/> and runs a nested main loop until
+		/// <see cref="EndLoop"/> is called or the dialog is closed.
+		/// </summary>
 		public void RunLoop (IWindowFrameBackend parent)
 		{
-			// GTK adds a border to the root widget, for some unknown reason
-			((Gtk.Container)Window.Child).BorderWidth = 0;
 			Gtk.Window p = parent != null ? ApplicationContext.Toolkit.GetNativeWindow (parent) as Gtk.Window : null;
-
-			bool keepRunning;
-			do {
-				var res = MessageService.RunCustomDialog (Window, p);
-				keepRunning = false;
-				if (res == (int) Gtk.ResponseType.DeleteEvent) {
-					keepRunning = !PerformClose (false);
-				}
-			} while (keepRunning);
+			var loop = new NestedLoop ();
+			runLoop = loop;
+			try {
+				MessageService.RunModal (Window, p, loop);
+			} finally {
+				if (runLoop == loop)
+					runLoop = null;
+			}
 		}
 
 		public void EndLoop ()
 		{
-			Window.Respond (Gtk.ResponseType.Ok);
-			Window.Hide ();
+			runLoop?.Quit ();
+			Window.Visible = false;
+		}
+
+		protected override bool OnCloseRequest ()
+		{
+			if (runLoop == null)
+				return base.OnCloseRequest ();
+			// closing a running dialog ends the loop if the frontend allows it; the window is kept
+			if (PerformClose (false))
+				runLoop?.Quit ();
+			return true;
 		}
 
 		public override bool Close ()
 		{
 			if (PerformClose (false)) {
-				Window.Respond (Gtk.ResponseType.Ok);
+				runLoop?.Quit ();
 				return true;
 			} else
 				return false;
@@ -172,11 +192,16 @@ namespace Xwt.GtkBackend
 		public override void GetMetrics (out Size minSize, out Size decorationSize)
 		{
 			base.GetMetrics (out minSize, out decorationSize);
-			var rq = Window.ActionArea.Visible ? Window.ActionArea.SizeRequest () : new Gtk.Requisition ();
-			if (rq.Width > minSize.Width)
-				minSize.Width = rq.Width;
-			decorationSize.Height += rq.Height;
+			if (!actionArea.Visible)
+				return;
+			int minW, natW, minH, natH, b1, b2;
+			actionArea.Measure (Gtk.Orientation.Horizontal, -1, out minW, out natW, out b1, out b2);
+			actionArea.Measure (Gtk.Orientation.Vertical, -1, out minH, out natH, out b1, out b2);
+			minW += actionArea.MarginStart + actionArea.MarginEnd;
+			natH += actionArea.MarginTop + actionArea.MarginBottom;
+			if (minW > minSize.Width)
+				minSize.Width = minW;
+			decorationSize.Height += natH;
 		}
 	}
 }
-

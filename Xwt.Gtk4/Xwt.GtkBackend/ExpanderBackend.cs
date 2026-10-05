@@ -1,3 +1,5 @@
+
+
 using System;
 
 using Xwt;
@@ -10,15 +12,14 @@ namespace Xwt.GtkBackend
 	{
 		public ExpanderBackend ()
 		{
-			Widget = new Gtk.Expander (string.Empty);
-			Widget.Show ();
+			Widget = Gtk.Expander.New (string.Empty);
 		}
 
 		protected new Gtk.Expander Widget {
 			get { return (Gtk.Expander)base.Widget; }
 			set { base.Widget = value; }
 		}
-		
+
 		protected new IExpandEventSink EventSink {
 			get { return (IExpandEventSink)base.EventSink; }
 		}
@@ -44,7 +45,7 @@ namespace Xwt.GtkBackend
 		public void SetContent (IWidgetBackend child)
 		{
 			RemoveChildPlacement (Widget.Child);
-			Widget.Child = GetWidgetWithPlacement (child);
+			Widget.Child = child != null ? GetWidgetWithPlacement (child) : null;
 		}
 
 		public override void EnableEvent (object eventId)
@@ -52,23 +53,22 @@ namespace Xwt.GtkBackend
 			base.EnableEvent (eventId);
 			if (eventId is ExpandEvent) {
 				if ((ExpandEvent)eventId == ExpandEvent.ExpandChanged)
-					Widget.Activated += HandleExpandedChanged;
+					Widget.AddNotification ("expanded", HandleExpandedChanged);
 			}
 		}
-		
+
 		public override void DisableEvent (object eventId)
 		{
 			base.DisableEvent (eventId);
 			if (eventId is ExpandEvent) {
 				if ((ExpandEvent)eventId == ExpandEvent.ExpandChanged)
-					Widget.Activated -= HandleExpandedChanged;
+					Widget.RemoveNotification ("expanded", HandleExpandedChanged);
 			}
 		}
 
-		void HandleExpandedChanged (object sender, EventArgs e)
+		void HandleExpandedChanged (object sender, GLib.NotifyArgs args)
 		{
 			ApplicationContext.InvokeUserCode (EventSink.ExpandChanged);
 		}
 	}
 }
-

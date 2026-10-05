@@ -23,6 +23,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 
@@ -34,24 +35,23 @@ namespace Xwt.GtkBackend
 		bool allowMixed;
 		bool internalActiveUpdate;
 		bool toggleEventEnabled;
-		
+		bool clickEventEnabled;
+
 		public CheckBoxBackend ()
 		{
 		}
 
 		public override void Initialize ()
 		{
-			NeedsEventBox = false;
 			Widget = new Gtk.CheckButton ();
-			Widget.Toggled += HandleWidgetActivated;
-			Widget.Show ();
+			Widget.Toggled += HandleWidgetToggled;
 		}
-		
+
 		protected new Gtk.CheckButton Widget {
 			get { return (Gtk.CheckButton)base.Widget; }
 			set { base.Widget = value; }
 		}
-		
+
 		protected new ICheckBoxEventSink EventSink {
 			get { return (ICheckBoxEventSink)base.EventSink; }
 		}
@@ -76,68 +76,47 @@ namespace Xwt.GtkBackend
 			}
 		}
 
-		protected override void OnSetBackgroundColor (Xwt.Drawing.Color color)
-		{
-			base.OnSetBackgroundColor (color);
-			Widget.SetBackgroundColor (color);
-			Widget.SetChildBackgroundColor (color);
-			EventsRootWidget.SetBackgroundColor (color);
-		}
-		
 		public void SetContent (string label, bool useMnemonic)
 		{
+			RemoveChildPlacement (Widget.Child);
 			Widget.UseUnderline = useMnemonic;
 			Widget.Label = label;
 		}
-		
+
 		public void SetContent (IWidgetBackend widget)
 		{
-			var w = (WidgetBackend)widget;
-			if (Widget.Children.Length > 0)
-				Widget.Remove(Widget.Children[0]);
+			RemoveChildPlacement (Widget.Child);
+			Widget.Child = widget != null ? GetWidgetWithPlacement (widget) : null;
+		}
 
-			if (w != null)
-				Widget.Add(w.Widget);
-		}
-		
-		public override object Font {
-			get {
-				return base.Font;
-			}
-			set {
-				var fd = (Pango.FontDescription) value;
-				foreach (var c in Widget.Children)
-					c.ModifyFont (fd);
-			}
-		}
-		
 		public override void EnableEvent (object eventId)
 		{
 			base.EnableEvent (eventId);
 			if (eventId is CheckBoxEvent) {
 				switch ((CheckBoxEvent)eventId) {
 				case CheckBoxEvent.Toggled: toggleEventEnabled = true; break;
-				case CheckBoxEvent.Clicked: Widget.Clicked += HandleWidgetClicked; break;
+				case CheckBoxEvent.Clicked: clickEventEnabled = true; break;
 				}
 			}
 		}
-		
+
 		public override void DisableEvent (object eventId)
 		{
 			base.DisableEvent (eventId);
 			if (eventId is CheckBoxEvent) {
 				switch ((CheckBoxEvent)eventId) {
 				case CheckBoxEvent.Toggled: toggleEventEnabled = false; break;
-				case CheckBoxEvent.Clicked: Widget.Clicked -= HandleWidgetClicked; break;
+				case CheckBoxEvent.Clicked: clickEventEnabled = false; break;
 				}
 			}
 		}
 
-		void HandleWidgetActivated (object sender, EventArgs e)
+		void HandleWidgetToggled (object sender, EventArgs e)
 		{
 			if (internalActiveUpdate)
 				return;
-			
+
+			// Off -> Mixed -> On cycle when mixed is allowed
 			if (allowMixed) {
 				if (!Widget.Active) {
 					if (Widget.Inconsistent)
@@ -151,21 +130,17 @@ namespace Xwt.GtkBackend
 				}
 			} else if (Widget.Inconsistent) {
 				Widget.Inconsistent = false;
+				internalActiveUpdate = true;
 				Widget.Active = false;
+				internalActiveUpdate = false;
 			}
 
-			if (toggleEventEnabled) {
+			if (toggleEventEnabled)
 				ApplicationContext.InvokeUserCode (EventSink.OnToggled);
-			}
-		}
 
-		void HandleWidgetClicked (object sender, EventArgs e)
-		{
-			if (internalActiveUpdate)
-				return;
-			
-			ApplicationContext.InvokeUserCode (EventSink.OnClicked);
+			// GTK 4: Gtk.CheckButton has no "clicked" signal; a non-programmatic toggle is a click
+			if (clickEventEnabled)
+				ApplicationContext.InvokeUserCode (EventSink.OnClicked);
 		}
 	}
 }
-

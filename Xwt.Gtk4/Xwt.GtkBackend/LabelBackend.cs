@@ -25,129 +25,71 @@
 // THE SOFTWARE.
 
 using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Security;
+using System.Text;
 using Xwt.Backends;
 using Xwt.Drawing;
-using Xwt.CairoBackend;
-using System.Runtime.InteropServices;
-using System.Linq;
-using System.Collections.Generic;
 
 
 namespace Xwt.GtkBackend
 {
-	public partial class LabelBackend: WidgetBackend, ILabelBackend
+	public class LabelBackend: WidgetBackend, ILabelBackend
 	{
 		Color? textColor;
-		List<LabelLink> links;
+		Alignment alignment;
+		FormattedText formattedText;
 
 		public LabelBackend ()
 		{
-			Widget = new Gtk.Label ();
-			Label.Show ();
+			Widget = Gtk.Label.New (null);
 			Label.Xalign = 0;
 			Label.Yalign = 0.5f;
-			Label.Realized += HandleStyleUpdate;
-			Label.StyleSet += HandleStyleUpdate;
+			Label.ActivateLink += HandleActivateLink;
 		}
-		
+
 		new ILabelEventSink EventSink {
 			get { return (ILabelEventSink)base.EventSink; }
 		}
 
 		protected Gtk.Label Label {
-			get {
-				if (Widget is Gtk.Label)
-					return (Gtk.Label) Widget;
-				else
-					return (Gtk.Label) ((Gtk.EventBox)base.Widget).Child;
-			}
+			get { return (Gtk.Label) Widget; }
 		}
 
-		bool linkEventEnabled;
-
-		void EnableLinkEvents ()
+		void HandleActivateLink (object o, Gtk.ActivateLinkArgs args)
 		{
-			if (!linkEventEnabled) {
-				linkEventEnabled = true;
-				AllocEventBox ();
-				EventsRootWidget.AddEvents ((int)Gdk.EventMask.PointerMotionMask);
-				EventsRootWidget.MotionNotifyEvent += HandleMotionNotifyEvent;
-				EventsRootWidget.AddEvents ((int)Gdk.EventMask.ButtonReleaseMask);
-				EventsRootWidget.ButtonReleaseEvent += HandleButtonReleaseEvent;
-				EventsRootWidget.AddEvents ((int)Gdk.EventMask.LeaveNotifyMask);
-				EventsRootWidget.LeaveNotifyEvent += HandleLeaveNotifyEvent;
-			}
+			// GTK 4: links are Pango markup <a> elements; GtkSharp's ActivateLinkArgs has no Uri member,
+			// so the URI comes from the raw signal args (or the label's current link).
+			string uri = args.Args != null && args.Args.Length > 0 ? args.Args [0] as string : null;
+			if (uri == null)
+				uri = Label.CurrentUri;
+			args.RetVal = OnActivateLink (uri);
 		}
 
-		bool mouseInLink;
-		CursorType normalCursor;
-
-		void HandleMotionNotifyEvent (object o, Gtk.MotionNotifyEventArgs args)
+		/// <summary>
+		/// Handles the activation of a link; returns true when the link has been handled
+		/// (otherwise GTK opens the URI itself).
+		/// </summary>
+		protected virtual bool OnActivateLink (string uri)
 		{
-			var li = FindLink (args.Event.X, args.Event.Y);
-			if (li != null) {
-				if (!mouseInLink) {
-					mouseInLink = true;
-					normalCursor = CurrentCursor;
-					SetCursor (CursorType.Hand);
-				}
-			} else {
-				if (mouseInLink) {
-					mouseInLink = false;
-					SetCursor (normalCursor ?? CursorType.Arrow);
-				}
-			}
-		}
-		
-		void HandleButtonReleaseEvent (object o, Gtk.ButtonReleaseEventArgs args)
-		{
-			var li = FindLink (args.Event.X, args.Event.Y);
-
-			if (li != null) {
-				ApplicationContext.InvokeUserCode (delegate {
-					EventSink.OnLinkClicked (li.Target);
-				});
-				args.RetVal = true;
-			};
-		}
-		
-		void HandleLeaveNotifyEvent (object o, Gtk.LeaveNotifyEventArgs args)
-		{
-			if (mouseInLink) {
-				mouseInLink = false;
-				SetCursor (normalCursor ?? CursorType.Arrow);
-			}
-		}
-
-		LabelLink FindLink (double px, double py)
-		{
-			if (links == null)
-				return null;
-
-			var alloc = Label.Allocation;
-
-			int offsetX, offsetY;
-			Label.GetLayoutOffsets (out offsetX, out offsetY);
-
-			var x = (px - offsetX + alloc.X) * Pango.Scale.PangoScale;
-			var y = (py - offsetY + alloc.Y) * Pango.Scale.PangoScale;
-
-			int byteIndex, trailing;
-			if (!Label.Layout.XyToIndex ((int)x, (int)y, out byteIndex, out trailing))
-				return null;
-
-			foreach (var li in links)
-				if (byteIndex >= li.StartIndex && byteIndex <= li.EndIndex)
-					return li;
-
-			return null;
+			Uri target = null;
+			if (!string.IsNullOrEmpty (uri))
+				Uri.TryCreate (uri, UriKind.RelativeOrAbsolute, out target);
+			ApplicationContext.InvokeUserCode (delegate {
+				EventSink.OnLinkClicked (target);
+			});
+			return true;
 		}
 
 		public virtual string Text {
 			get { return Label.Text; }
 			set {
-				links = null;
-				Label.Text = value;
+				formattedText = null;
+				Label.UseMarkup = false;
+				Label.Attributes = null;
+				Label.Text = value ?? string.Empty;
 			}
 		}
 
@@ -156,65 +98,33 @@ namespace Xwt.GtkBackend
 			set { Label.Selectable = value; }
 		}
 
-		FormattedText formattedText;
 		public void SetFormattedText (FormattedText text)
 		{
-			Label.Text = text.Text;
 			formattedText = text;
-			var indexer = Label.ApplyFormattedText (text);
-
-			if (links != null)
-				links.Clear ();
-
-			foreach (var attr in text.Attributes.OfType<LinkTextAttribute> ()) {
-				LabelLink ll = new LabelLink () {
-					StartIndex = indexer != null ? indexer.IndexToByteIndex (attr.StartIndex) : attr.StartIndex,
-					EndIndex = indexer != null ? indexer.IndexToByteIndex (attr.StartIndex + attr.Count) : attr.StartIndex + attr.Count,
-					Target = attr.Target
-				};
-				if (links == null) {
-					links = new List<LabelLink> ();
-					EnableLinkEvents ();
-				}
-				links.Add (ll);
+			if (text == null) {
+				Text = string.Empty;
+				return;
 			}
-
-			if (links == null || links.Count == 0) {
-				links = null;
-				indexer = null;
+			if (text.Attributes.OfType<LinkTextAttribute> ().Any ()) {
+				// links need markup so that GTK handles hover, focus and the activate-link signal
+				Label.Attributes = null;
+				Label.Markup = FormattedTextMarkup.ToMarkup (text, true);
+			} else {
+				Label.UseMarkup = false;
+				Label.Text = text.Text ?? string.Empty;
+				Label.ApplyFormattedText (text);
 			}
 		}
 
-		void HandleStyleUpdate (object sender, EventArgs e)
-		{
-			// force text update with updated link color
-			if (Label.IsRealized && formattedText != null) {
-				SetFormattedText (formattedText);
-			}
-		}
-
-		[DllImport (GtkInterop.LIBGTK, CallingConvention=CallingConvention.Cdecl)]
-		static extern void gtk_label_set_attributes (IntPtr label, IntPtr attrList);
-
-		public Xwt.Drawing.Color TextColor {
+		public Color TextColor {
 			get {
-				return textColor.HasValue ? textColor.Value : Widget.Style.Foreground (Gtk.StateType.Normal).ToXwtValue ();
+				return textColor.HasValue ? textColor.Value : Label.GetForegroundColor ();
 			}
 			set {
-				var color = value.ToGtkValue ();
-				var attr = new Pango.AttrForeground (color.Red, color.Green, color.Blue);
-				var attrs = new Pango.AttrList ();
-				attrs.Insert (attr);
-
-				Label.Attributes = attrs;
-
 				textColor = value;
-				Label.QueueDraw ();
+				Label.SetForegroundColor (value);
 			}
 		}
-
-
-		Alignment alignment;
 
 		public Alignment TextAlignment {
 			get {
@@ -231,17 +141,19 @@ namespace Xwt.GtkBackend
 			switch (alignment) {
 				case Alignment.Start:
 					Label.Justify = Gtk.Justification.Left;
+					Label.Xalign = 0f;
 					break;
 				case Alignment.End:
 					Label.Justify = Gtk.Justification.Right;
+					Label.Xalign = 1f;
 					break;
 				case Alignment.Center:
 					Label.Justify = Gtk.Justification.Center;
+					Label.Xalign = 0.5f;
 					break;
 			}
-			SetAlignmentGtk ();
 		}
-		
+
 		public EllipsizeMode Ellipsize {
 			get {
 				return Label.Ellipsize.ToXwtValue ();
@@ -253,53 +165,113 @@ namespace Xwt.GtkBackend
 
 		public WrapMode Wrap {
 			get {
-				if (!Label.LineWrap)
+				if (!Label.Wrap)
 					return WrapMode.None;
-				else {
-					switch (Label.LineWrapMode) {
-					case Pango.WrapMode.Char:
-						return WrapMode.Character;
-					case Pango.WrapMode.Word:
-						return WrapMode.Word;
-					case Pango.WrapMode.WordChar:
-						return WrapMode.WordAndCharacter;
-					default:
-						return WrapMode.None;
-					}
+				switch (Label.WrapMode) {
+				case Pango.WrapMode.Char:
+					return WrapMode.Character;
+				case Pango.WrapMode.Word:
+					return WrapMode.Word;
+				case Pango.WrapMode.WordChar:
+					return WrapMode.WordAndCharacter;
+				default:
+					return WrapMode.None;
 				}
 			}
 			set {
-				ToggleSizeCheckEventsForWrap (value);
-				if (value == WrapMode.None){
-					if (Label.LineWrap) {
-						Label.LineWrap = false;
-					}
-				} else {
-					if (!Label.LineWrap) {
-						Label.LineWrap = true;
-					}
-					switch (value) {
-					case WrapMode.Character:
-						Label.LineWrapMode = Pango.WrapMode.Char;
-						break;
-					case WrapMode.Word:
-						Label.LineWrapMode = Pango.WrapMode.Word;
-						break;
-					case WrapMode.WordAndCharacter:
-						Label.LineWrapMode = Pango.WrapMode.WordChar;
-						break;
-					}
+				Label.Wrap = value != WrapMode.None;
+				switch (value) {
+				case WrapMode.Character:
+					Label.WrapMode = Pango.WrapMode.Char;
+					break;
+				case WrapMode.Word:
+					Label.WrapMode = Pango.WrapMode.Word;
+					break;
+				case WrapMode.WordAndCharacter:
+					Label.WrapMode = Pango.WrapMode.WordChar;
+					break;
 				}
 				SetAlignment ();
 			}
 		}
 	}
 
-	class LabelLink
+	/// <summary>
+	/// Converts a <see cref="FormattedText"/> to Pango markup (used where GTK 4 needs markup instead of
+	/// an attribute list: label links and menu model labels).
+	/// </summary>
+	static class FormattedTextMarkup
 	{
-		public int StartIndex;
-		public int EndIndex;
-		public Uri Target;
+		public static string ToMarkup (FormattedText text, bool withLinks)
+		{
+			var s = text.Text ?? string.Empty;
+			var bounds = new SortedSet<int> { 0, s.Length };
+			foreach (var a in text.Attributes) {
+				bounds.Add (Clamp (a.StartIndex, s.Length));
+				bounds.Add (Clamp (a.StartIndex + a.Count, s.Length));
+			}
+			var b = bounds.ToArray ();
+			var sb = new StringBuilder ();
+			for (int i = 0; i < b.Length - 1; i++) {
+				int start = b [i], end = b [i + 1];
+				if (end <= start)
+					continue;
+				var attrs = text.Attributes.Where (a => a.StartIndex <= start && a.StartIndex + a.Count >= end).ToList ();
+				var link = withLinks ? attrs.OfType<LinkTextAttribute> ().LastOrDefault () : null;
+				var span = GetSpanAttributes (attrs);
+				if (link != null)
+					sb.Append ("<a href=\"").Append (Escape (link.Target != null ? link.Target.ToString () : string.Empty)).Append ("\">");
+				if (span.Length > 0)
+					sb.Append ("<span").Append (span).Append ('>');
+				sb.Append (Escape (s.Substring (start, end - start)));
+				if (span.Length > 0)
+					sb.Append ("</span>");
+				if (link != null)
+					sb.Append ("</a>");
+			}
+			return sb.ToString ();
+		}
+
+		static int Clamp (int v, int max)
+		{
+			return v < 0 ? 0 : (v > max ? max : v);
+		}
+
+		public static string Escape (string s)
+		{
+			return SecurityElement.Escape (s) ?? string.Empty;
+		}
+
+		static string ToHex (Color c)
+		{
+			return string.Format (CultureInfo.InvariantCulture, "#{0:x2}{1:x2}{2:x2}", (int)(c.Red * 255), (int)(c.Green * 255), (int)(c.Blue * 255));
+		}
+
+		static string GetSpanAttributes (List<TextAttribute> attrs)
+		{
+			var sb = new StringBuilder ();
+			foreach (var a in attrs) {
+				if (a is ColorTextAttribute ca)
+					sb.Append (" foreground=\"").Append (ToHex (ca.Color)).Append ('"');
+				else if (a is BackgroundTextAttribute ba)
+					sb.Append (" background=\"").Append (ToHex (ba.Color)).Append ('"');
+				else if (a is FontWeightTextAttribute wa)
+					sb.Append (" weight=\"").Append (((int)wa.Weight).ToString (CultureInfo.InvariantCulture)).Append ('"');
+				else if (a is FontStyleTextAttribute sa)
+					sb.Append (" style=\"").Append (sa.Style == FontStyle.Italic ? "italic" : sa.Style == FontStyle.Oblique ? "oblique" : "normal").Append ('"');
+				else if (a is UnderlineTextAttribute ua)
+					sb.Append (" underline=\"").Append (ua.Underline ? "single" : "none").Append ('"');
+				else if (a is StrikethroughTextAttribute st)
+					sb.Append (" strikethrough=\"").Append (st.Strikethrough ? "true" : "false").Append ('"');
+				else if (a is FontSizeTextAttribute fs)
+					sb.Append (" size=\"").Append (((int)(fs.Size * Pango.Scale.PangoScale)).ToString (CultureInfo.InvariantCulture)).Append ('"');
+				else if (a is FontTextAttribute fa && fa.Font != null) {
+					var fd = Toolkit.GetBackend (fa.Font) as Pango.FontDescription;
+					if (fd != null)
+						sb.Append (" font_desc=\"").Append (Escape (fd.ToString ())).Append ('"');
+				}
+			}
+			return sb.ToString ();
+		}
 	}
 }
-

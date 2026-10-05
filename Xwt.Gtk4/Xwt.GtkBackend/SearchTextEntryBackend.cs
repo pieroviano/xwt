@@ -1,10 +1,10 @@
 //
-// LabelBackendGtk3.cs
+// SearchTextEntryBackend.cs
 //
 // Author:
-//       Vsevolod Kukol <v.kukol@rubologic.de>
+//       Vsevolod Kukol <sevo@sevo.org>
 //
-// Copyright (c) 2014 Vsevolod Kukol
+// Copyright (c) 2014 Xamarin, Inc (http://www.xamarin.com)
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -23,29 +23,44 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
+using Xwt.Backends;
 
 namespace Xwt.GtkBackend
 {
-	public partial class LabelBackend
+	public class SearchTextEntryBackend: TextEntryBackend, ISearchTextEntryBackend
 	{
-		void SetAlignmentGtk ()
+		public override void Initialize ()
 		{
-			switch (TextAlignment) {
-				case Alignment.Start:
-					Label.Xalign = 0f;
-					break;
-				case Alignment.End:
-					Label.Xalign = 1;
-					break;
-				case Alignment.Center:
-					Label.Xalign = 0.5f;
-					break;
-			}
+			base.Initialize ();
+			TextEntry.PrimaryIconName = "edit-find-symbolic";
+			TextEntry.PrimaryIconActivatable = false;
+			TextEntry.PrimaryIconSensitive = false;
+			TextEntry.Changed += ShowHideClearButton;
+			TextEntry.IconRelease += ResetSearch;
 		}
 
-		void ToggleSizeCheckEventsForWrap (WrapMode wrapMode)
-		{}
+		void ResetSearch (object o, Gtk.IconReleaseArgs args)
+		{
+			if (args.IconPos == Gtk.EntryIconPosition.Secondary)
+				Text = String.Empty;
+		}
+
+		void ShowHideClearButton (object sender, EventArgs e)
+		{
+			if (String.IsNullOrEmpty (this.Text)) {
+				TextEntry.SecondaryIconName = null;
+				TextEntry.SecondaryIconActivatable = false;
+				TextEntry.SecondaryIconSensitive = false;
+			} else {
+				TextEntry.SecondaryIconName = "edit-clear-symbolic";
+				TextEntry.SecondaryIconActivatable = true;
+				TextEntry.SecondaryIconSensitive = true;
+			}
+		}
 	}
 }
+
+
 

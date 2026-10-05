@@ -43,10 +43,10 @@ namespace Xwt.GtkBackend
 		public static Gdk.RGBA ToGtkRgbaValue (this Xwt.Drawing.Color color)
 		{
 			var rgba = new Gdk.RGBA ();
-			rgba.Red = color.Red;
-			rgba.Green = color.Green;
-			rgba.Blue = color.Blue;
-			rgba.Alpha = color.Alpha;
+			rgba.Red = (float)color.Red;
+			rgba.Green = (float)color.Green;
+			rgba.Blue = (float)color.Blue;
+			rgba.Alpha = (float)color.Alpha;
 			return rgba;
 		}
 

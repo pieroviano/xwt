@@ -25,7 +25,6 @@
 // THE SOFTWARE.
 
 using System;
-using System.Security;
 using Xwt;
 using Xwt.Backends;
 
@@ -35,6 +34,7 @@ namespace Xwt.GtkBackend
 	class LinkLabelBackend : LabelBackend, ILinkLabelBackend
 	{
 		Uri uri;
+		string text = string.Empty;
 
 		bool ClickEnabled {
 			get; set;
@@ -55,17 +55,11 @@ namespace Xwt.GtkBackend
 		}
 
 		public override string Text {
-			get { return base.Text; }
+			get { return text; }
 			set {
-				base.Text = value;
+				text = value ?? string.Empty;
 				SetMarkup ();
 			}
-		}
-
-		public LinkLabelBackend ()
-		{
-			Label.UseMarkup = true;
-			Label.SetLinkHandler (OpenLink);
 		}
 
 		public override void EnableEvent (object eventId)
@@ -79,7 +73,7 @@ namespace Xwt.GtkBackend
 				}
 			}
 		}
-		
+
 		public override void DisableEvent (object eventId)
 		{
 			base.DisableEvent (eventId);
@@ -94,20 +88,20 @@ namespace Xwt.GtkBackend
 
 		void SetMarkup ()
 		{
-			var text = Label.Text;
-			string url = string.Format ("<a href=\"{1}\">{0}</a>", SecurityElement.Escape (text), uri != null ? SecurityElement.Escape (uri.ToString ()) : "");
-			Label.Markup = url;
+			Label.Attributes = null;
+			Label.Markup = string.Format ("<a href=\"{1}\">{0}</a>", FormattedTextMarkup.Escape (text), uri != null ? FormattedTextMarkup.Escape (uri.ToString ()) : "");
 		}
 
-		void OpenLink (string link)
+		protected override bool OnActivateLink (string link)
 		{
 			if (ClickEnabled) {
-				var uri = !string.IsNullOrEmpty (link)? new Uri (link, UriKind.RelativeOrAbsolute) : null;
+				var target = !string.IsNullOrEmpty (link) ? new Uri (link, UriKind.RelativeOrAbsolute) : null;
 				ApplicationContext.InvokeUserCode (() => {
-					EventSink.OnNavigateToUrl (uri);
+					EventSink.OnNavigateToUrl (target);
 				});
 			}
+			// the frontend opens the URL (NavigateToUrl default action); never let GTK open it too
+			return true;
 		}
 	}
 }
-

@@ -23,6 +23,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 
@@ -32,12 +33,7 @@ namespace Xwt.GtkBackend
 	{
 		public void Initialize (Orientation dir)
 		{
-			if (dir == Orientation.Horizontal)
-				Widget = new Gtk.HSeparator ();
-			else
-				Widget = new Gtk.VSeparator ();
-			Widget.Show ();
+			Widget = new Gtk.Separator (dir == Orientation.Horizontal ? Gtk.Orientation.Horizontal : Gtk.Orientation.Vertical);
 		}
 	}
 }
-

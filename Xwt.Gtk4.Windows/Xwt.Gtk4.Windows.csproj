@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Windows platform extensions for the Xwt GTK 4 backend (loaded by Xwt.Gtk4's GtkEngine on Windows). -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <TargetFrameworks></TargetFrameworks>
+    <AssemblyName>Xwt.Gtk4.Windows</AssemblyName>
+    <RootNamespace>Xwt.Gtk.Windows</RootNamespace>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <SignAssembly>true</SignAssembly>
+    <AssemblyOriginatorKeyFile>..\xwt.snk</AssemblyOriginatorKeyFile>
+    <LangVersion>9</LangVersion>
+    <NoWarn>$(NoWarn);0612;0618</NoWarn>
+    <GtkSharp4Version Condition="'$(GtkSharp4Version)' == ''">4.22.4.*</GtkSharp4Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="GtkSharp4" Version="$(GtkSharp4Version)" />
+    <PackageReference Include="GdkSharp4" Version="$(GtkSharp4Version)" />
+    <PackageReference Include="GLibSharp4" Version="$(GtkSharp4Version)" />
+    <PackageReference Include="CairoSharp4" Version="$(GtkSharp4Version)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Xwt.WPF\Xwt.WPFBackend.Interop\IDocHostUIHandler.cs" Link="IDocHostUIHandler.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Xwt.Gtk4\Xwt.Gtk4.csproj" Private="false" />
+    <ProjectReference Include="..\Xwt\Xwt.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>

@@ -23,61 +23,37 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
-
 using System;
 using Xwt.Backends;
-using Gdk;
-
 
 namespace Xwt.GtkBackend
 {
+	/// <summary>
+	/// GTK 4: there is no status icon (GtkStatusIcon was removed and GTK has no system-tray API).
+	/// The backend keeps the API working without showing anything.
+	/// </summary>
 	public class StatusIconBackend : IStatusIconBackend
 	{
-		Gtk.StatusIcon statusItem;
-		MenuBackend menu;
-		ApplicationContext context;
-			
 		public void InitializeBackend (object frontend, ApplicationContext context)
 		{
-			this.context = context;
-			statusItem = new Gtk.StatusIcon();
 		}
 
-		public void SetImage (ImageDescription image) 
+		public void SetImage (ImageDescription image)
 		{
-			image = image.WithDefaultSize (Gtk.IconSize.Menu);
-			statusItem.Pixbuf = ((GtkImage)image.Backend).GetBestFrame (context, Util.GetDefaultScaleFactor (), image.Size.Width, image.Size.Height, true);
 		}
-		
-		public void SetMenu (object menuBackend) 
+
+		public void SetMenu (object menuBackend)
 		{
 			if (menuBackend == null) {
 				throw new ArgumentNullException ("menuBackend");
 			}
-			if (menu != null) {
-				statusItem.PopupMenu -= HandleStatusItemPopupMenu;
-			}
-			menu = (MenuBackend)menuBackend;
-			statusItem.PopupMenu += HandleStatusItemPopupMenu;
 		}
-		
-		void HandleStatusItemPopupMenu (object o, Gtk.PopupMenuArgs args)
+
+		public void Dispose ()
 		{
-			menu.Popup();
 		}
-		
-		public void Dispose () 
-		{
-			if (statusItem != null) {
-				statusItem.Dispose();
-			}
-			statusItem = null;
-			menu = null;
-		}
-		
-		public void EnableEvent (object eventId) { throw new NotImplementedException (); }
-		public void DisableEvent (object eventId) { throw new NotImplementedException (); }
-		
+
+		public void EnableEvent (object eventId) { }
+		public void DisableEvent (object eventId) { }
 	}
 }
-

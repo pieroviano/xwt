@@ -26,137 +26,123 @@
 using System;
 using System.Linq;
 using Xwt.Backends;
-using System.Collections.Generic;
 using System.Threading;
 
 
 namespace Xwt.GtkBackend
 {
+	/// <summary>
+	/// Clipboard on <see cref="Gdk.Clipboard"/>. GTK 4 reads the clipboard asynchronously; the
+	/// synchronous Xwt API waits in a nested main loop, except for data set by this process,
+	/// which is returned directly.
+	/// </summary>
 	public class GtkClipboardBackend: ClipboardBackend
 	{
-//		Gtk.Clipboard primaryClipboard;
-		Gtk.Clipboard clipboard;
-		
+		Gdk.Clipboard clipboard;
+		Gdk.ContentProvider ownProvider;
+		TransferDataType ownType;
+		object ownValue;
+
 		public GtkClipboardBackend ()
 		{
-			clipboard = Gtk.Clipboard.Get (Gdk.Atom.Intern ("CLIPBOARD", false));
-//			primaryClipboard = Gtk.Clipboard.Get (Gdk.Atom.Intern ("PRIMARY", false));
+			clipboard = Gdk.Display.Default.Clipboard;
+		}
+
+		bool HasOwnData {
+			get {
+				if (ownProvider == null || !clipboard.IsLocal)
+					return false;
+				var content = clipboard.Content;
+				return content != null && content.Handle == ownProvider.Handle;
+			}
 		}
 
 		#region IClipboardBackend implementation
 		public override void Clear ()
 		{
-			clipboard.Clear ();
+			ownProvider = null;
+			ownValue = null;
+			clipboard.SetContent (null);
 		}
 
+		/// <summary>
+		/// Sets the clipboard content. GTK 4 content providers hold their data, so the data source
+		/// is evaluated now rather than when the data is requested.
+		/// </summary>
 		public override void SetData (TransferDataType type, Func<object> dataSource)
 		{
-			clipboard.SetWithData ((Gtk.TargetEntry[])Util.BuildTargetTable (new TransferDataType[] { type }), 
-			  delegate (Gtk.Clipboard cb, Gtk.SelectionData data, uint id) {
-				TransferDataType ttype = Util.AtomToType (data.Target.Name);
-				if (ttype == type)
-					Util.SetSelectionData (data, data.Target.Name, dataSource ());
-			},
-			delegate {
-			});
+			var value = dataSource ();
+			if (value == null) {
+				Clear ();
+				return;
+			}
+			var providers = Util.CreateContentProviders (type, value).ToArray ();
+			var provider = providers.Length == 1 ? providers [0] : new Gdk.ContentProvider (providers);
+			ownType = type;
+			ownValue = value;
+			ownProvider = provider;
+			clipboard.SetContent (provider);
 		}
 
 		public override bool IsTypeAvailable (TransferDataType type)
 		{
-			if (type == TransferDataType.Text)
-				return clipboard.WaitIsTextAvailable ();
-			if (type == TransferDataType.Image)
-				return clipboard.WaitIsImageAvailable ();
-			
-			foreach (var at in GetAtomsForType (type)) {
-				if (clipboard.WaitIsTargetAvailable (at))
-					return true;
-			}
-			return false;
-		}
-		
-		IEnumerable<Gdk.Atom> GetAtomsForType (TransferDataType type)
-		{
-			foreach (Gtk.TargetEntry te in (Gtk.TargetEntry[])Util.BuildTargetTable (new TransferDataType[] { type }))
-				yield return Gdk.Atom.Intern (te.Target, false);
+			if (HasOwnData)
+				return ownType == type;
+			var formats = clipboard.Formats;
+			return formats != null && Util.GetDragTypes (formats).Contains (type);
 		}
 
 		public override object GetData (TransferDataType type)
 		{
-			if (type == TransferDataType.Text)
-				return clipboard.WaitForText ();
-			if (type == TransferDataType.Image)
-				return ApplicationContext.Toolkit.WrapImage (new GtkImage (clipboard.WaitForImage()));
-			
-			TransferDataStore store = new TransferDataStore ();
-			
-			foreach (var at in GetAtomsForType (type)) {
-				var data = clipboard.WaitForContents (at);
-				Util.GetSelectionData (ApplicationContext, data, store);
-			}
+			if (HasOwnData)
+				return ownType == type ? ownValue : null;
+
+			var store = new TransferDataStore ();
+			var loop = new NestedLoop ();
+			Util.ReadTransferData (ApplicationContext, clipboard, new [] { type }, store, loop.Quit);
+			loop.Run ();
 			return ((ITransferData)store).GetValue (type);
 		}
 
 		public override IAsyncResult BeginGetData (TransferDataType type, AsyncCallback callback, object state)
 		{
-			var atts = GetAtomsForType (type).ToArray ();
-			return new DataRequest (ApplicationContext, clipboard, callback, state, type, atts);
+			var request = new DataRequest (callback, state);
+			if (HasOwnData) {
+				request.SetComplete (ownType == type ? ownValue : null);
+				return request;
+			}
+			var store = new TransferDataStore ();
+			Util.ReadTransferData (ApplicationContext, clipboard, new [] { type }, store, () => request.SetComplete (((ITransferData)store).GetValue (type)));
+			return request;
 		}
 
 		public override object EndGetData (IAsyncResult ares)
 		{
 			return ((DataRequest)ares).Result;
 		}
-		
+
 		#endregion
 	}
-	
+
 	class DataRequest: IAsyncResult
 	{
-		Gtk.Clipboard clipboard;
-		Gdk.Atom[] atoms;
-		int index = 0;
+		readonly object sync = new object ();
 		ManualResetEvent doneEvent;
 		bool complete;
-		TransferDataType type;
 		AsyncCallback callback;
-		ApplicationContext context;
-		
-		public DataRequest (ApplicationContext context, Gtk.Clipboard clipboard, AsyncCallback callback, object state, TransferDataType type, Gdk.Atom[] atoms)
+
+		public DataRequest (AsyncCallback callback, object state)
 		{
-			this.context = context;
 			this.callback = callback;
-			this.type = type;
 			AsyncState = state;
-			this.atoms = atoms;
-			this.clipboard = clipboard;
-			RequestData ();
 		}
-		
+
 		public object Result { get; set; }
-		
-		void RequestData ()
+
+		public void SetComplete (object result)
 		{
-			clipboard.RequestContents (atoms[index], DataReceived);
-		}
-		
-		void DataReceived (Gtk.Clipboard cb, Gtk.SelectionData data)
-		{
-			TransferDataStore store = new TransferDataStore ();
-			if (Util.GetSelectionData (context, data, store)) {
-				Result = ((ITransferData)store).GetValue (type);
-				SetComplete ();
-			} else {
-				if (++index < atoms.Length)
-					RequestData ();
-				else
-					SetComplete ();
-			}
-		}
-		
-		void SetComplete ()
-		{
-			lock (atoms) {
+			Result = result;
+			lock (sync) {
 				complete = true;
 				if (doneEvent != null)
 					doneEvent.Set ();
@@ -167,13 +153,13 @@ namespace Xwt.GtkBackend
 				});
 			}
 		}
-		
+
 		#region IAsyncResult implementation
 		public object AsyncState { get; set; }
 
 		public WaitHandle AsyncWaitHandle {
 			get {
-				lock (atoms) {
+				lock (sync) {
 					if (doneEvent == null)
 						doneEvent = new ManualResetEvent (complete);
 				}
@@ -195,4 +181,3 @@ namespace Xwt.GtkBackend
 		#endregion
 	}
 }
-

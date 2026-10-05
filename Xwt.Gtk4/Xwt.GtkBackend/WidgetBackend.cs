@@ -50,7 +50,11 @@ namespace Xwt.GtkBackend
 		bool minSizeSet;
 
 		// lazily created event controllers
-		Gtk.GestureClick clickGesture;
+		Gtk.EventControllerLegacy buttonController;
+		bool buttonPressEnabled, buttonReleaseEnabled;
+		uint lastPressButton, lastPressTime;
+		Point lastPressPosition;
+		int pressCount;
 		Gtk.EventControllerMotion motionController;
 		Gtk.EventControllerKey keyController;        // capture phase: events targeted at Widget itself
 		Gtk.EventControllerKey bubbleKeyController;  // bubble phase: events coming from children
@@ -125,7 +129,7 @@ namespace Xwt.GtkBackend
 
 		void MoveControllers (Gtk.Widget from, Gtk.Widget to)
 		{
-			foreach (var c in new Gtk.EventController[] { clickGesture, motionController, keyController, bubbleKeyController, scrollController, focusController, dragSource, dropTarget }) {
+			foreach (var c in new Gtk.EventController[] { buttonController, motionController, keyController, bubbleKeyController, scrollController, focusController, dragSource, dropTarget }) {
 				if (c != null && c.Widget == from) {
 					from.RemoveController (c);
 					to.AddController (c);
@@ -560,15 +564,16 @@ namespace Xwt.GtkBackend
 
 		#region Event controllers
 
-		Gtk.GestureClick ClickGesture {
-			get {
-				if (clickGesture == null) {
-					clickGesture = new Gtk.GestureClick ();
-					clickGesture.Button = 0; // all buttons
-					clickGesture.PropagationPhase = Gtk.PropagationPhase.Capture;
-					EventsRootWidget.AddController (clickGesture);
-				}
-				return clickGesture;
+		// Button events go through a capture-phase legacy controller: a GestureClick here would be
+		// denied (and lose the release) whenever the widget's own gestures claim the sequence, e.g.
+		// a TreeView row click. This reproduces the GTK 2/3 "connect before" button handlers.
+		void EnsureButtonController ()
+		{
+			if (buttonController == null) {
+				buttonController = new Gtk.EventControllerLegacy ();
+				buttonController.PropagationPhase = Gtk.PropagationPhase.Capture;
+				LegacyEvents.Connect (buttonController, HandleButtonEvent);
+				EventsRootWidget.AddController (buttonController);
 			}
 		}
 
@@ -668,10 +673,12 @@ namespace Xwt.GtkBackend
 					MotionController.Leave += HandleLeaveNotifyEvent;
 					break;
 				case WidgetEvent.ButtonPressed:
-					ClickGesture.Pressed += HandleButtonPressEvent;
+					EnsureButtonController ();
+					buttonPressEnabled = true;
 					break;
 				case WidgetEvent.ButtonReleased:
-					ClickGesture.Released += HandleButtonReleaseEvent;
+					EnsureButtonController ();
+					buttonReleaseEnabled = true;
 					break;
 				case WidgetEvent.MouseMoved:
 					MotionController.Motion += HandleMotionNotifyEvent;
@@ -722,12 +729,10 @@ namespace Xwt.GtkBackend
 						motionController.Leave -= HandleLeaveNotifyEvent;
 					break;
 				case WidgetEvent.ButtonPressed:
-					if (clickGesture != null)
-						clickGesture.Pressed -= HandleButtonPressEvent;
+					buttonPressEnabled = false;
 					break;
 				case WidgetEvent.ButtonReleased:
-					if (clickGesture != null)
-						clickGesture.Released -= HandleButtonReleaseEvent;
+					buttonReleaseEnabled = false;
 					break;
 				case WidgetEvent.MouseMoved:
 					if (motionController != null)
@@ -1006,48 +1011,84 @@ namespace Xwt.GtkBackend
 			return new MouseMovedEventArgs (CurrentEventTime (motionController), args.X, args.Y);
 		}
 
-		void HandleButtonReleaseEvent (object o, Gtk.ReleasedArgs args)
+		bool GetEventPosition (Gdk.Event evt, out double x, out double y)
 		{
-			var a = GetButtonReleaseEventArgs (args);
-			if (a == null)
-				return;
-			ApplicationContext.InvokeUserCode (delegate {
-				EventSink.OnButtonReleased (a);
-			});
-			if (a.Handled)
-				clickGesture.SetState (Gtk.EventSequenceState.Claimed);
+			x = y = 0;
+			double ex, ey, sx, sy;
+			var widget = EventsRootWidget;
+			var native = widget.Native;
+			var nativeWidget = widget.GetNativeWidget ();
+			if (native == null || nativeWidget == null || !evt.GetPosition (out ex, out ey))
+				return false;
+			// event coordinates are relative to the surface, which is offset from the native widget
+			native.GetSurfaceTransform (out sx, out sy);
+			return nativeWidget.TranslateCoordinates (widget, ex - sx, ey - sy, out x, out y);
 		}
 
-		protected virtual ButtonEventArgs GetButtonReleaseEventArgs (Gtk.ReleasedArgs args)
+		bool HandleButtonEvent (Gdk.Event evt)
+		{
+			var type = evt.EventType;
+			bool press = type == Gdk.EventType.ButtonPress;
+			if (!press && type != Gdk.EventType.ButtonRelease)
+				return false;
+			if (press ? !buttonPressEnabled : !buttonReleaseEnabled)
+				return false;
+			double x, y;
+			if (!GetEventPosition (evt, out x, out y))
+				return false;
+			var button = new Gdk.ButtonEvent (evt.Handle).Button;
+			var state = evt.ModifierState;
+
+			if (press) {
+				// GTK 4 delivers no 2BUTTON/3BUTTON_PRESS events: count the presses here
+				var settings = Gtk.Settings.Default;
+				int time = settings != null ? settings.GtkDoubleClickTime : 400;
+				int distance = settings != null ? settings.GtkDoubleClickDistance : 5;
+				if (button == lastPressButton && evt.Time - lastPressTime <= time
+				    && Math.Abs (x - lastPressPosition.X) <= distance && Math.Abs (y - lastPressPosition.Y) <= distance)
+					pressCount++;
+				else
+					pressCount = 1;
+				lastPressButton = button;
+				lastPressTime = evt.Time;
+				lastPressPosition = new Point (x, y);
+
+				var a = GetButtonPressEventArgs (button, pressCount, x, y, state);
+				if (a == null)
+					return false;
+				ApplicationContext.InvokeUserCode (delegate {
+					EventSink.OnButtonPressed (a);
+				});
+				return a.Handled;
+			} else {
+				var a = GetButtonReleaseEventArgs (button, pressCount, x, y, state);
+				if (a == null)
+					return false;
+				ApplicationContext.InvokeUserCode (delegate {
+					EventSink.OnButtonReleased (a);
+				});
+				return a.Handled;
+			}
+		}
+
+		protected virtual ButtonEventArgs GetButtonReleaseEventArgs (uint button, int nPress, double x, double y, Gdk.ModifierType state)
 		{
 			var a = new ButtonEventArgs ();
-			a.X = args.X;
-			a.Y = args.Y;
-			a.Button = (PointerButton) clickGesture.CurrentButton;
-			a.MultiplePress = args.NPress;
+			a.X = x;
+			a.Y = y;
+			a.Button = (PointerButton) button;
+			a.MultiplePress = nPress;
 			return a;
 		}
 
-		void HandleButtonPressEvent (object o, Gtk.PressedArgs args)
-		{
-			var a = GetButtonPressEventArgs (args);
-			if (a == null)
-				return;
-			ApplicationContext.InvokeUserCode (delegate {
-				EventSink.OnButtonPressed (a);
-			});
-			if (a.Handled)
-				clickGesture.SetState (Gtk.EventSequenceState.Claimed);
-		}
-
-		protected virtual ButtonEventArgs GetButtonPressEventArgs (Gtk.PressedArgs args)
+		protected virtual ButtonEventArgs GetButtonPressEventArgs (uint button, int nPress, double x, double y, Gdk.ModifierType state)
 		{
 			var a = new ButtonEventArgs ();
-			a.X = args.X;
-			a.Y = args.Y;
-			a.Button = (PointerButton) clickGesture.CurrentButton;
-			a.MultiplePress = args.NPress;
-			a.IsContextMenuTrigger = GtkWorkarounds.TriggersContextMenu (clickGesture.CurrentButton, clickGesture.CurrentEventState);
+			a.X = x;
+			a.Y = y;
+			a.Button = (PointerButton) button;
+			a.MultiplePress = nPress;
+			a.IsContextMenuTrigger = GtkWorkarounds.TriggersContextMenu (button, state);
 			return a;
 		}
 

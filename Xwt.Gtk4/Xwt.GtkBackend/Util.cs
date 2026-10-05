@@ -229,7 +229,7 @@ namespace Xwt.GtkBackend
 				return;
 			}
 			ReadTransferData (context, drop.Formats, types, store, done,
-				(mimes, cb) => drop.ReadAsync (mimes, GLib.Priority.Default, null, cb),
+				(mimes, cb) => drop.ReadAsync (mimes, (int)GLib.Priority.Default, null, cb),
 				res => { string m; var s = drop.ReadFinish (res, out m); return Tuple.Create (s, m); });
 		}
 
@@ -239,7 +239,7 @@ namespace Xwt.GtkBackend
 		internal static void ReadTransferData (ApplicationContext context, Gdk.Clipboard clipboard, TransferDataType[] types, TransferDataStore store, Action done)
 		{
 			ReadTransferData (context, clipboard.Formats, types, store, done,
-				(mimes, cb) => clipboard.ReadAsync (mimes, GLib.Priority.Default, null, cb),
+				(mimes, cb) => clipboard.ReadAsync (mimes, (int)GLib.Priority.Default, null, cb),
 				res => { string m; var s = clipboard.ReadFinish (res, out m); return Tuple.Create (s, m); });
 		}
 
@@ -306,9 +306,9 @@ namespace Xwt.GtkBackend
 					return;
 				}
 				buffer.Write (chunk, 0, chunk.Length);
-				stream.ReadBytesAsync (65536, GLib.Priority.Default, null, cb);
+				stream.ReadBytesAsync (65536, (int)GLib.Priority.Default, null, cb);
 			};
-			stream.ReadBytesAsync (65536, GLib.Priority.Default, null, cb);
+			stream.ReadBytesAsync (65536, (int)GLib.Priority.Default, null, cb);
 		}
 
 		#endregion

@@ -23,16 +23,36 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 
 namespace Xwt.GtkBackend
 {
+	/// <summary>
+	/// Radio item: a string stateful action whose target is the action name (rendered as a radio by GTK).
+	/// The backend does not know the radio group (the frontend unchecks the other items), so each item
+	/// has its own action: checked when the state equals the target.
+	/// </summary>
 	public class RadioButtonMenuItemBackend: MenuItemBackend, IRadioButtonMenuItemBackend
 	{
-		public RadioButtonMenuItemBackend (): base (new Gtk.CheckMenuItem ("") { DrawAsRadio = true })
+		protected override GLib.SimpleAction CreateAction (string name)
 		{
+			return new GLib.SimpleAction (name, GLib.VariantType.String, new GLib.Variant (string.Empty));
+		}
+
+		protected override GLib.Variant ActionTarget {
+			get { return new GLib.Variant (Action.Name); }
+		}
+
+		public override bool Checked {
+			get { return (string) Action.State == Action.Name; }
+			set { Action.State = new GLib.Variant (value ? Action.Name : string.Empty); }
+		}
+
+		protected override void OnActivated (GLib.Variant parameter)
+		{
+			Checked = true;
 		}
 	}
 }
-

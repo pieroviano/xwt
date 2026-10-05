@@ -23,6 +23,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 
@@ -35,18 +36,16 @@ namespace Xwt.GtkBackend
 		public override void Initialize ()
 		{
 			Widget = new ImageBox (ApplicationContext);
-			Widget.Show ();
 		}
-		
+
 		protected new ImageBox Widget {
 			get { return (ImageBox)base.Widget; }
 			set { base.Widget = value; }
 		}
-		
+
 		public void SetImage (ImageDescription image)
 		{
 			Widget.Image = image;
 		}
 	}
 }
-

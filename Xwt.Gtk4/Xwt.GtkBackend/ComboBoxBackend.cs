@@ -39,14 +39,12 @@ namespace Xwt.GtkBackend
 
 		public override void Initialize ()
 		{
-			//NeedsEventBox = false;  // TODO: needs fix: no events with or without event box
 			Widget = (Gtk.ComboBox) CreateWidget ();
 			if (Widget.Cells.Length == 0) {
 				var cr = new Gtk.CellRendererText ();
 				Widget.PackStart (cr, false);
 				Widget.AddAttribute (cr, "text", 0);
 			}
-			Widget.Show ();
 			Widget.RowSeparatorFunc = IsRowSeparator;
 		}
 		
@@ -92,7 +90,7 @@ namespace Xwt.GtkBackend
 			}
 		}
 
-		void HandleChanged (object sender, EventArgs e)
+		void HandleChanged (object sender, System.EventArgs e)
 		{
 			ApplicationContext.InvokeUserCode (EventSink.OnSelectionChanged);
 		}
@@ -160,6 +158,10 @@ namespace Xwt.GtkBackend
 		}
 
 		public virtual void SetCurrentEventRow (string path)
+		{
+		}
+
+		void ICellRendererTarget.OnCellDataLoaded (object target, Gtk.CellRenderer cr, Gtk.TreeIter iter)
 		{
 		}
 

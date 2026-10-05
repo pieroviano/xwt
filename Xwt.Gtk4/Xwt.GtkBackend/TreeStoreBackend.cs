@@ -69,7 +69,7 @@ namespace Xwt.GtkBackend
 		public event EventHandler<TreeNodeChildEventArgs> NodeDeleted;
 		public event EventHandler<TreeNodeEventArgs> NodeChanged;
 		public event EventHandler<TreeNodeOrderEventArgs> NodesReordered;
-		public event EventHandler Cleared;
+		public event System.EventHandler Cleared;
 		
 		IterPos GetIterPos (TreePosition pos)
 		{
@@ -86,7 +86,7 @@ namespace Xwt.GtkBackend
 			version++;
 			Tree.Clear ();
 			if (Cleared != null)
-				Cleared (this, EventArgs.Empty);
+				Cleared (this, System.EventArgs.Empty);
 		}
 
 		public TreePosition GetChild (TreePosition pos, int index)

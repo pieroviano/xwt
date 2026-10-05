@@ -23,6 +23,7 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 
@@ -35,12 +36,7 @@ namespace Xwt.GtkBackend
 		public void Initialize (Orientation dir)
 		{
 			adjustment = new Gtk.Adjustment (0, 0, 1, 1, 1, 1);
-
-			if (dir == Orientation.Horizontal)
-				Widget = new Gtk.HScrollbar (adjustment);
-			else
-				Widget = new Gtk.VScrollbar (adjustment);
-			Widget.Show ();
+			Widget = new Gtk.Scrollbar (dir == Orientation.Horizontal ? Gtk.Orientation.Horizontal : Gtk.Orientation.Vertical, adjustment);
 		}
 
 		public IScrollAdjustmentBackend CreateAdjustment ()
@@ -49,4 +45,3 @@ namespace Xwt.GtkBackend
 		}
 	}
 }
-

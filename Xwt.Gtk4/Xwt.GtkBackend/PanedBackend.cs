@@ -23,90 +23,96 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 
 namespace Xwt.GtkBackend
 {
-	public partial class PanedBackend: WidgetBackend, IPanedBackend
+	public class PanedBackend: WidgetBackend, IPanedBackend
 	{
+		public PanedBackend ()
+		{
+		}
+
 		protected new Gtk.Paned Widget {
 			get { return (Gtk.Paned)base.Widget; }
 			set { base.Widget = value; }
 		}
-		
+
 		protected new IPanedEventSink EventSink {
 			get { return (IPanedEventSink)base.EventSink; }
 		}
 
 		public void Initialize (Orientation dir)
 		{
-			if (dir == Orientation.Horizontal)
-				Widget = new Gtk.HPaned ();
-			else
-				Widget = new Gtk.VPaned ();
-			Widget.Show ();
+			Widget = new Gtk.Paned (dir == Orientation.Horizontal ? Gtk.Orientation.Horizontal : Gtk.Orientation.Vertical);
 		}
-		
+
 		public void SetPanel (int panel, IWidgetBackend widget, bool resize, bool shrink)
 		{
 			if (panel == 1) {
-				RemoveChildPlacement (Widget.Child1);
-				Widget.Pack1 (GetWidgetWithPlacement (widget), resize, shrink);
+				RemoveChildPlacement (Widget.StartChild);
+				Widget.StartChild = GetWidgetWithPlacement (widget);
+				Widget.ResizeStartChild = resize;
+				Widget.ShrinkStartChild = shrink;
 			} else {
-				RemoveChildPlacement (Widget.Child2);
-				Widget.Pack2 (GetWidgetWithPlacement (widget), resize, shrink);
+				RemoveChildPlacement (Widget.EndChild);
+				Widget.EndChild = GetWidgetWithPlacement (widget);
+				Widget.ResizeEndChild = resize;
+				Widget.ShrinkEndChild = shrink;
 			}
 		}
-		
+
 		public void RemovePanel (int panel)
 		{
 			if (panel == 1) {
-				RemoveChildPlacement (Widget.Child1);
-				Widget.Remove (Widget.Child1);
+				var c = Widget.StartChild;
+				Widget.StartChild = null;
+				RemoveChildPlacement (c);
 			} else {
-				RemoveChildPlacement (Widget.Child2);
-				Widget.Remove (Widget.Child2);
+				var c = Widget.EndChild;
+				Widget.EndChild = null;
+				RemoveChildPlacement (c);
 			}
 		}
-		
+
 		public void UpdatePanel (int panel, bool resize, bool shrink)
 		{
 			if (panel == 1) {
-				var c = (Gtk.Paned.PanedChild)Widget[Widget.Child1];
-				c.Resize = resize;
-				c.Shrink = shrink;
-			}
-			else {
-				var c = (Gtk.Paned.PanedChild)Widget[Widget.Child2];
-				c.Resize = resize;
-				c.Shrink = shrink;
+				Widget.ResizeStartChild = resize;
+				Widget.ShrinkStartChild = shrink;
+			} else {
+				Widget.ResizeEndChild = resize;
+				Widget.ShrinkEndChild = shrink;
 			}
 		}
-		
+
 		public double Position {
 			get { return Widget.Position; }
 			set { Widget.Position = (int) value; }
 		}
-		
+
 		public override void EnableEvent (object eventId)
 		{
 			base.EnableEvent (eventId);
 			if (eventId is PanedEvent) {
 				switch ((PanedEvent)eventId) {
-					case PanedEvent.PositionChanged:
-						Widget.AddNotification ("position", HandleMove);break;
+				case PanedEvent.PositionChanged:
+					Widget.AddNotification ("position", HandleMove);
+					break;
 				}
 			}
 		}
-		
+
 		public override void DisableEvent (object eventId)
 		{
 			base.DisableEvent (eventId);
 			if (eventId is PanedEvent) {
 				switch ((PanedEvent)eventId) {
-					case PanedEvent.PositionChanged:
-						Widget.RemoveNotification ("position", HandleMove);break;
+				case PanedEvent.PositionChanged:
+					Widget.RemoveNotification ("position", HandleMove);
+					break;
 				}
 			}
 		}
@@ -117,4 +123,3 @@ namespace Xwt.GtkBackend
 		}
 	}
 }
-

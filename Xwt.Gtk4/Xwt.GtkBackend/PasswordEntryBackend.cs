@@ -1,16 +1,15 @@
 using Xwt.Backends;
 using System;
-using Xwt.Drawing;
 
 namespace Xwt.GtkBackend
 {
-	public partial class PasswordEntryBackend : WidgetBackend, IPasswordEntryBackend
+	public class PasswordEntryBackend : WidgetBackend, IPasswordEntryBackend
 	{
 		public override void Initialize ()
 		{
 			Widget = new Gtk.Entry ();
-			Widget.Show ();
 			Widget.Visibility = false;
+			Widget.InputPurpose = Gtk.InputPurpose.Password;
 		}
 
 		protected new Gtk.Entry Widget {
@@ -38,14 +37,9 @@ namespace Xwt.GtkBackend
 			}
 		}
 
-		public override Color BackgroundColor {
-			get {
-				return base.BackgroundColor;
-			}
-			set {
-				base.BackgroundColor = value;
-				Widget.ModifyBase (Gtk.StateType.Normal, value.ToGtkValue ());
-			}
+		public string PlaceholderText {
+			get { return Widget.PlaceholderText; }
+			set { Widget.PlaceholderText = value; }
 		}
 
 		public override void EnableEvent (object eventId)

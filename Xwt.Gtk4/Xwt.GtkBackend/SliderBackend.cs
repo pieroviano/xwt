@@ -37,13 +37,12 @@ namespace Xwt.GtkBackend
 		public void Initialize (Orientation dir)
 		{
 			if (dir == Orientation.Horizontal)
-				Widget = new Gtk.HScale (0, 1.0, 1);
+				Widget = new Gtk.Scale (Gtk.Orientation.Horizontal, 0, 1.0, 1);
 			else
-				Widget = new Gtk.VScale (0, 1.0, 1) { Inverted = true };
+				Widget = new Gtk.Scale (Gtk.Orientation.Vertical, 0, 1.0, 1) { Inverted = true };
 
 			Widget.DrawValue = false;
 			Widget.ValueChanged += HandleValueChanged;
-			Widget.Show ();
 		}
 		
 		protected new Gtk.Scale Widget {

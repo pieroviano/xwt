@@ -23,60 +23,98 @@
 // LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 // THE SOFTWARE.
+
 using System;
 using Xwt.Backends;
 using Xwt.Drawing;
 
 namespace Xwt.GtkBackend
 {
-	public class FrameBackend:  WidgetBackend, IFrameBackend
+	/// <summary>
+	/// FrameType.WidgetBox: a Gtk.Frame (padding applied by an inner border-less <see cref="HeaderBox"/>);
+	/// FrameType.Custom: a <see cref="HeaderBox"/> drawing the border widths/colour itself.
+	/// </summary>
+	public class FrameBackend: WidgetBackend, IFrameBackend
 	{
-		Gtk.Alignment paddingAlign;
+		HeaderBox paddingBox;
 		string label;
 		Color? borderColor;
-		
+		Gtk.Widget content;
+
 		public FrameBackend ()
 		{
-			Widget = new Gtk.Frame ();
-			Widget.Show ();
+			Widget = new Gtk.Frame (null);
 		}
-		
-		protected new Gtk.Bin Widget {
-			get { return (Gtk.Bin)base.Widget; }
-			set { base.Widget = value; }
-		}
-		
+
 		protected new IFrameEventSink EventSink {
 			get { return (IFrameEventSink)base.EventSink; }
+		}
+
+		Gtk.Frame GtkFrame {
+			get { return Widget as Gtk.Frame; }
+		}
+
+		HeaderBox CustomBox {
+			get { return Widget as HeaderBox; }
+		}
+
+		/// <summary>Detaches the content widget from whatever currently holds it.</summary>
+		void DetachContent ()
+		{
+			if (content == null)
+				return;
+			if (paddingBox != null && paddingBox.Child == content)
+				paddingBox.Child = null;
+			else if (CustomBox != null && CustomBox.Child == content)
+				CustomBox.Child = null;
+			else if (GtkFrame != null && GtkFrame.Child == content)
+				GtkFrame.Child = null;
+		}
+
+		/// <summary>Puts the content widget in the current frame widget.</summary>
+		void AttachContent ()
+		{
+			if (CustomBox != null) {
+				CustomBox.Child = content;
+			} else if (paddingBox != null) {
+				paddingBox.Child = content;
+				if (GtkFrame.Child != paddingBox)
+					GtkFrame.Child = paddingBox;
+			} else
+				GtkFrame.Child = content;
+		}
+
+		public override void UpdateChildPlacement (IWidgetBackend childBackend)
+		{
+			base.UpdateChildPlacement (childBackend);
+			// the placement wrapper may have been added or removed around the content
+			content = CustomBox != null ? CustomBox.Child : paddingBox != null ? paddingBox.Child : GtkFrame.Child;
 		}
 
 		#region IFrameBackend implementation
 
 		public void SetContent (IWidgetBackend child)
 		{
-			Gtk.Bin parent = paddingAlign != null ? paddingAlign : Widget;
-
-			if (parent.Child != null) {
-				RemoveChildPlacement (parent.Child);
-				parent.Remove (parent.Child);
-			}
-
-			if (child != null) {
-				var w = GetWidgetWithPlacement (child);
-				parent.Child = w;
-			} else {
-				parent.Child = null;
-			}
+			DetachContent ();
+			RemoveChildPlacement (content);
+			content = child != null ? GetWidgetWithPlacement (child) : null;
+			AttachContent ();
 		}
+
 		public void SetFrameType (FrameType type)
 		{
 			Frame f = (Frame) Frontend;
-			
+
 			switch (type) {
 			case FrameType.Custom:
-				if (!(Widget is HeaderBox)) {
+				if (CustomBox == null) {
+					DetachContent ();
+					if (paddingBox != null) {
+						if (GtkFrame != null)
+							GtkFrame.Child = null;
+						paddingBox = null;
+					}
 					HeaderBox box = new HeaderBox ();
-					box.Show ();
 					box.BackgroundColor = UsingCustomBackgroundColor ? (Color?)BackgroundColor : null;
 					#pragma warning disable CS0618 // Type or member is obsolete
 					box.SetMargins ((int)f.BorderWidthTop, (int)f.BorderWidthBottom, (int)f.BorderWidthLeft, (int)f.BorderWidthRight);
@@ -84,109 +122,80 @@ namespace Xwt.GtkBackend
 					box.SetPadding ((int)f.Padding.Top, (int)f.Padding.Bottom, (int)f.Padding.Left, (int)f.Padding.Right);
 					if (borderColor != null)
 						box.SetBorderColor (borderColor.Value);
-					var c = paddingAlign != null ? paddingAlign.Child : Widget.Child;
-					if (c != null) {
-						((Gtk.Container)c.Parent).Remove (c);
-						box.Add (c);
-					}
 					Widget = box;
-					if (paddingAlign != null) {
-						paddingAlign.Destroy ();
-						paddingAlign = null;
-					}
+					AttachContent ();
 				}
 				break;
 			case FrameType.WidgetBox:
-				if (!(Widget is Gtk.Frame)) {
-					var c = Widget.Child;
-					if (c != null)
-						Widget.Remove (c);
-					Gtk.Frame gf = new Gtk.Frame ();
-					if (!string.IsNullOrEmpty (label))
-						gf.Label = label;
-					if (f.Padding.HorizontalSpacing != 0 || f.Padding.VerticalSpacing != 0) {
-						paddingAlign = new Gtk.Alignment (0, 0, 1, 1);
-						paddingAlign.Show ();
-						UreatePaddingAlign (f.Padding.Top, f.Padding.Bottom, f.Padding.Left, f.Padding.Right);
-						if (c != null)
-							paddingAlign.Add (c);
-						gf.Add (paddingAlign);
-					} else {
-						if (c != null)
-							gf.Add (c);
-					}
-					gf.Show ();
+				if (GtkFrame == null) {
+					DetachContent ();
+					var gf = new Gtk.Frame (string.IsNullOrEmpty (label) ? null : label);
 					Widget = gf;
+					if (f.Padding.HorizontalSpacing != 0 || f.Padding.VerticalSpacing != 0) {
+						paddingBox = new HeaderBox ();
+						paddingBox.SetPadding ((int)f.Padding.Top, (int)f.Padding.Bottom, (int)f.Padding.Left, (int)f.Padding.Right);
+					}
+					AttachContent ();
 				}
 				break;
 			}
-		}
-		
-		void UreatePaddingAlign (double top, double bottom, double left, double right)
-		{
-			paddingAlign.TopPadding = (uint) top;
-			paddingAlign.BottomPadding = (uint) bottom;
-			paddingAlign.LeftPadding = (uint) left;
-			paddingAlign.RightPadding = (uint) right;
 		}
 
 		public void SetBorderSize (double left, double right, double top, double bottom)
 		{
-			HeaderBox hb = Widget as HeaderBox;
-			if (hb != null) {
-				hb.SetMargins ((int)top, (int)bottom, (int)left, (int)right);
-			}
+			CustomBox?.SetMargins ((int)top, (int)bottom, (int)left, (int)right);
 		}
 
 		public void SetPadding (double left, double right, double top, double bottom)
 		{
-			if (Widget is HeaderBox) {
-				HeaderBox hb = (HeaderBox) Widget;
-				hb.SetPadding ((int)top, (int)bottom, (int)left, (int)right);
+			if (CustomBox != null) {
+				CustomBox.SetPadding ((int)top, (int)bottom, (int)left, (int)right);
 				return;
 			}
-			
-			if (left == 0 && right == 0 && top == 0 && bottom == 0 && paddingAlign == null)
+
+			if (left == 0 && right == 0 && top == 0 && bottom == 0 && paddingBox == null)
 				return;
 
-			if (paddingAlign == null) {
-				paddingAlign = new Gtk.Alignment (0, 0, 1, 1);
-				paddingAlign.Show ();
-				var c = Widget.Child;
-				if (c != null) {
-					Widget.Remove (c);
-					paddingAlign.Add (c);
-				}
-				Widget.Add (paddingAlign);
+			if (paddingBox == null) {
+				DetachContent ();
+				paddingBox = new HeaderBox ();
+				AttachContent ();
 			}
-			UreatePaddingAlign (top, bottom, left, right);
+			paddingBox.SetPadding ((int)top, (int)bottom, (int)left, (int)right);
 		}
 
 		public Color BorderColor {
 			get {
-				if (borderColor == null)
-					return Widget.Style.Dark (Gtk.StateType.Normal).ToXwtValue ();
-				else
-					return borderColor.Value;
+				if (borderColor == null) {
+					Gdk.RGBA c;
+					if (Widget.StyleContext.LookupColor ("borders", out c))
+						return c.ToXwtValue ();
+					return new Color (0.5, 0.5, 0.5);
+				}
+				return borderColor.Value;
 			}
 			set {
 				borderColor = value;
-				HeaderBox hb = Widget as HeaderBox;
-				if (hb != null)
-					hb.SetBorderColor (value);
+				CustomBox?.SetBorderColor (value);
 			}
 		}
-		
+
 		public override Color BackgroundColor {
 			get {
 				return base.BackgroundColor;
 			}
 			set {
 				base.BackgroundColor = value;
-				if (Widget is HeaderBox) {
-					((HeaderBox)Widget).BackgroundColor = value;
-				}
+				if (CustomBox != null)
+					CustomBox.BackgroundColor = value;
 			}
+		}
+
+		protected override void OnSetBackgroundColor (Color color)
+		{
+			// the custom frame paints its own background
+			if (CustomBox == null)
+				base.OnSetBackgroundColor (color);
 		}
 
 		public string Label {
@@ -195,20 +204,10 @@ namespace Xwt.GtkBackend
 			}
 			set {
 				label = value;
-				if (Widget is Gtk.Frame)
-					((Gtk.Frame)Widget).Label = value;
+				if (GtkFrame != null)
+					GtkFrame.Label = string.IsNullOrEmpty (value) ? null : value;
 			}
 		}
 		#endregion
 	}
-
-	class FrameWidget: Gtk.Frame, IConstraintProvider
-	{
-
-		public void GetConstraints (Gtk.Widget target, out SizeConstraint width, out SizeConstraint height)
-		{
-			width = height = SizeConstraint.Unconstrained;
-		}
-	}
 }
-
