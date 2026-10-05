@@ -51,6 +51,7 @@ namespace Xwt
 		bool exitCallbackRegistered;
 
 		static KnownBackend[] knownBackends = new [] {
+			new KnownBackend { Type = ToolkitType.Gtk4, TypeName = "Xwt.GtkBackend.GtkEngine, Xwt.Gtk4" },
 			new KnownBackend { Type = ToolkitType.Gtk3, TypeName = "Xwt.GtkBackend.GtkEngine, Xwt.Gtk3" },
 			new KnownBackend { Type = ToolkitType.Gtk, TypeName = "Xwt.GtkBackend.GtkEngine, Xwt.Gtk" },
 			new KnownBackend { Type = ToolkitType.XamMac, TypeName = "Xwt.Mac.MacEngine, Xwt.XamMac" },
@@ -89,14 +90,18 @@ namespace Xwt
 				if (nativeEngine == null) {
 					switch (Desktop.DesktopType) {
 						case DesktopType.Linux:
-							// don't mix Gtk2 and Gtk3
-							if (CurrentEngine != null && (CurrentEngine.Type == ToolkitType.Gtk || CurrentEngine.Type == ToolkitType.Gtk3))
+							// don't mix Gtk versions
+							if (CurrentEngine != null && IsGtk (CurrentEngine.Type))
 								nativeEngine = CurrentEngine;
-							else if (!TryLoad (ToolkitType.Gtk3, out nativeEngine))
+							else if (!TryLoadLoaded (ToolkitType.Gtk4, out nativeEngine) && !TryLoad (ToolkitType.Gtk3, out nativeEngine))
 								TryLoad (ToolkitType.Gtk, out nativeEngine);
 							break;
 						case DesktopType.Windows:
-							TryLoad (ToolkitType.Wpf, out nativeEngine);
+							// a loaded Gtk4 backend is the native engine: Wpf cannot host Gtk4 widgets
+							if (CurrentEngine != null && CurrentEngine.Type == ToolkitType.Gtk4)
+								nativeEngine = CurrentEngine;
+							else if (!TryLoadLoaded (ToolkitType.Gtk4, out nativeEngine))
+								TryLoad (ToolkitType.Wpf, out nativeEngine);
 							break;
 						case DesktopType.Mac:
 							TryLoad (ToolkitType.XamMac, out nativeEngine);
@@ -258,6 +263,29 @@ namespace Xwt
 			}
 			toolkit = null;
 			return false;
+		}
+
+		static bool IsGtk (ToolkitType type)
+		{
+			return type == ToolkitType.Gtk || type == ToolkitType.Gtk3 || type == ToolkitType.Gtk4;
+		}
+
+		/// <summary>
+		/// Loads the toolkit only if it is already in use: either a toolkit of that type exists, or
+		/// its backend assembly is already loaded in the AppDomain (the application chose it).
+		/// </summary>
+		static bool TryLoadLoaded (ToolkitType type, out Toolkit toolkit)
+		{
+			toolkit = toolkits.Values.FirstOrDefault (tk => tk.toolkitType == type);
+			if (toolkit != null)
+				return true;
+			var backend = knownBackends.FirstOrDefault (tk => tk.Type == type);
+			if (backend == null)
+				return false;
+			var asmName = backend.TypeName.Substring (backend.TypeName.IndexOf (',') + 1).Trim ();
+			if (!AppDomain.CurrentDomain.GetAssemblies ().Any (a => a.GetName ().Name == asmName))
+				return false;
+			return TryLoad (type, out toolkit);
 		}
 
 		/// <summary>
