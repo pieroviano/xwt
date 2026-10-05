@@ -28,7 +28,6 @@ using System;
 
 using Xwt.Backends;
 using Xwt.CairoBackend;
-using Gdk;
 using System.Reflection;
 using System.IO;
 
@@ -37,10 +36,18 @@ namespace Xwt.GtkBackend
 	public class GtkEngine: ToolkitEngineBackend
 	{
 		GtkPlatformBackend platformBackend;
+		static GLib.MainLoop mainLoop;
 
 		public override void InitializeApplication ()
 		{
-			Gtk.Application.Init ();
+			if (!Gtk.Global.IsInitialized) {
+				var args = Environment.GetCommandLineArgs ();
+				if (args != null && args.Length > 0)
+					GLib.Global.ProgramName = Path.GetFileNameWithoutExtension (args [0]);
+				Gtk.Global.Init ();
+			}
+			if (!(System.Threading.SynchronizationContext.Current is GLib.GLibSynchronizationContext))
+				System.Threading.SynchronizationContext.SetSynchronizationContext (new GLib.GLibSynchronizationContext ());
 		}
 
 		public override void InitializeBackends ()
@@ -118,15 +125,12 @@ namespace Xwt.GtkBackend
 			RegisterBackend<IPopupWindowBackend, PopupWindowBackend> ();
 			RegisterBackend<IUtilityWindowBackend, UtilityWindowBackend> ();
 
+
 			string typeName = null;
 			string asmName = null;
-			if (Platform.IsMac) {
-				typeName = "Xwt.Gtk.Mac.MacPlatformBackend";
-				asmName = "Xwt.Gtk.Mac";
-			}
-			else if (Platform.IsWindows) {
+			if (Platform.IsWindows) {
 				typeName = "Xwt.Gtk.Windows.WindowsPlatformBackend";
-				asmName = "Xwt.Gtk.Windows";
+				asmName = "Xwt.Gtk4.Windows";
 			}
 
 			if (typeName != null) {
@@ -159,78 +163,170 @@ namespace Xwt.GtkBackend
 			base.Dispose();
 		}
 
+		/// <summary>
+		/// The main loop driven by <see cref="RunApplication"/> (GTK 4 has no gtk_main).
+		/// </summary>
+		public static GLib.MainLoop MainLoop {
+			get {
+				if (mainLoop == null)
+					mainLoop = new GLib.MainLoop ();
+				return mainLoop;
+			}
+		}
+
 		public override void RunApplication ()
 		{
-			Gtk.Application.Run ();
+			MainLoop.Run ();
 		}
-		
+
 		public override void ExitApplication ()
 		{
-			Gtk.Application.Quit ();
+			if (mainLoop != null && mainLoop.IsRunning)
+				mainLoop.Quit ();
 		}
-		
+
 		public override bool HandlesSizeNegotiation {
 			get {
 				return true;
 			}
 		}
 
+		/// <summary>
+		/// Puts <paramref name="newWidget"/> in place of <paramref name="oldWidget"/> in its parent.
+		/// </summary>
 		public static void ReplaceChild (Gtk.Widget oldWidget, Gtk.Widget newWidget)
 		{
-			Gtk.Container cont = oldWidget.Parent as Gtk.Container;
-			if (cont == null)
+			var parent = oldWidget.Parent;
+			if (parent == null)
 				return;
-			
-			if (cont is IGtkContainer) {
-				((IGtkContainer)cont).ReplaceChild (oldWidget, newWidget);
+
+			if (parent is IGtkContainer) {
+				((IGtkContainer)parent).ReplaceChild (oldWidget, newWidget);
 			}
-			else if (cont is Gtk.Notebook) {
-				Gtk.Notebook notebook = (Gtk.Notebook)cont;
-				Gtk.Notebook.NotebookChild nc = (Gtk.Notebook.NotebookChild)notebook [oldWidget];
-				var detachable = nc.Detachable;
-				var pos = nc.Position;
-				var reorderable = nc.Reorderable;
-				var tabExpand = nc.TabExpand;
-				var tabFill = nc.TabFill;
-				var label = notebook.GetTabLabel (oldWidget);
-				notebook.Remove (oldWidget);
-				notebook.InsertPage (newWidget, label, pos);
-				
-				nc = (Gtk.Notebook.NotebookChild)notebook [newWidget];
-				nc.Detachable = detachable;
-				nc.Reorderable = reorderable;
-				nc.TabExpand = tabExpand;
-				nc.TabFill = tabFill;
+			else if (parent is WidgetPlacementWrapper) {
+				((WidgetPlacementWrapper)parent).Child = newWidget;
 			}
-			else if (cont is Gtk.Paned) {
-				var paned = (Gtk.Paned)cont;
-				var pc = (Gtk.Paned.PanedChild)paned[oldWidget];
-				var resize = pc.Resize;
-				var shrink = pc.Shrink;
+			else if (parent is Gtk.Box) {
+				var box = (Gtk.Box)parent;
+				var prev = oldWidget.PrevSibling;
+				box.Remove (oldWidget);
+				box.InsertChildAfter (newWidget, prev);
+			}
+			else if (parent is Gtk.Paned) {
+				var paned = (Gtk.Paned)parent;
 				var pos = paned.Position;
-				if (paned.Child1 == oldWidget) {
-					paned.Remove (oldWidget);
-					paned.Pack1 (newWidget, resize, shrink);
-				} else {
-					paned.Remove (oldWidget);
-					paned.Pack2 (newWidget, resize, shrink);
-				}
+				if (paned.StartChild == oldWidget)
+					paned.StartChild = newWidget;
+				else
+					paned.EndChild = newWidget;
 				paned.Position = pos;
 			}
-			else if (cont is Gtk.Bin) {
-				((Gtk.Bin)cont).Remove (oldWidget);
-				((Gtk.Bin)cont).Child  = newWidget;
+			else if (IsNotebookPage (oldWidget)) {
+				// notebook pages live in an internal stack of the notebook
+				ReplaceNotebookPage (FindAncestor<Gtk.Notebook> (parent), oldWidget, newWidget);
+			}
+			else {
+				// Window, Frame, Expander, ScrolledWindow, Viewport, Overlay, Popover, Button...
+				// all expose their single child through the "child" property
+				SetChildProperty (parent, newWidget, oldWidget);
 			}
 		}
-		
+
+		static bool IsNotebookPage (Gtk.Widget w)
+		{
+			var nb = FindAncestor<Gtk.Notebook> (w.Parent);
+			return nb != null && nb.PageNum (w) >= 0;
+		}
+
+		static T FindAncestor<T> (Gtk.Widget w) where T: Gtk.Widget
+		{
+			while (w != null && !(w is T))
+				w = w.Parent;
+			return (T)w;
+		}
+
+		static void ReplaceNotebookPage (Gtk.Notebook notebook, Gtk.Widget oldWidget, Gtk.Widget newWidget)
+		{
+			if (notebook == null)
+				return;
+			int pos = notebook.PageNum (oldWidget);
+			if (pos < 0)
+				return;
+			var label = notebook.GetTabLabel (oldWidget);
+			var reorderable = notebook.GetTabReorderable (oldWidget);
+			var detachable = notebook.GetTabDetachable (oldWidget);
+			if (label != null)
+				notebook.SetTabLabel (oldWidget, null);
+			notebook.RemovePage (pos);
+			notebook.InsertPage (newWidget, label, pos);
+			notebook.SetTabReorderable (newWidget, reorderable);
+			notebook.SetTabDetachable (newWidget, detachable);
+		}
+
+		static void SetChildProperty (Gtk.Widget parent, Gtk.Widget child, Gtk.Widget expected)
+		{
+			using (var current = parent.GetProperty ("child")) {
+				if (expected != null && (current.Val as Gtk.Widget) != expected)
+					return;
+			}
+			using (var v = new GLib.Value (child))
+				parent.SetProperty ("child", v);
+		}
+
+		/// <summary>
+		/// Removes a widget from its parent, whatever the parent type.
+		/// </summary>
+		public static void RemoveChild (Gtk.Widget child)
+		{
+			var parent = child.Parent;
+			if (parent == null)
+				return;
+			if (parent is IGtkContainer)
+				((IGtkContainer)parent).RemoveChild (child);
+			else if (parent is WidgetPlacementWrapper)
+				((WidgetPlacementWrapper)parent).Child = null;
+			else if (parent is Gtk.Box)
+				((Gtk.Box)parent).Remove (child);
+			else if (parent is Gtk.Paned) {
+				var paned = (Gtk.Paned)parent;
+				if (paned.StartChild == child)
+					paned.StartChild = null;
+				else
+					paned.EndChild = null;
+			}
+			else if (IsNotebookPage (child)) {
+				var notebook = FindAncestor<Gtk.Notebook> (parent);
+				notebook.RemovePage (notebook.PageNum (child));
+			}
+			else {
+				try {
+					SetChildPropertyNull (parent, child);
+				} catch {
+					child.Unparent ();
+				}
+			}
+		}
+
+		static void SetChildPropertyNull (Gtk.Widget parent, Gtk.Widget child)
+		{
+			using (var current = parent.GetProperty ("child")) {
+				if ((current.Val as Gtk.Widget) != child) {
+					child.Unparent ();
+					return;
+				}
+			}
+			using (var v = new GLib.Value (Gtk.Widget.GType))
+				parent.SetProperty ("child", v);
+		}
+
 		public override void InvokeAsync (Action action)
 		{
 			if (action == null)
 				throw new ArgumentNullException ("action");
 
-			// Switch to no Invoke(Action) once a gtk# release is done.
-			Gtk.Application.Invoke ((o, args) => {
+			GLib.Idle.Add (GLib.Priority.Default, () => {
 				action ();
+				return false;
 			});
 		}
 
@@ -252,18 +348,20 @@ namespace Xwt.GtkBackend
 			GLib.Source.Remove ((uint)id);
 		}
 
+		/// <summary>Returns the <see cref="Gtk.Widget"/> of the Xwt widget.</summary>
 		public override object GetNativeWidget (Widget w)
 		{
 			IGtkWidgetBackend wb = (IGtkWidgetBackend)Toolkit.GetBackend (w);
 			return wb.Widget;
 		}
 
+		/// <summary>Returns a <see cref="Gdk.Pixbuf"/> rendering of the image at its size.</summary>
 		public override object GetNativeImage (Xwt.Drawing.Image image)
 		{
 			var pix = (GtkImage)Toolkit.GetBackend (image);
 			return pix.ToPixbuf (ApplicationContext, image.Size.Width, image.Size.Height);
 		}
-		
+
 		public override IWindowFrameBackend GetBackendForWindow (object nativeWindow)
 		{
 			var win = new WindowFrameBackend ();
@@ -273,17 +371,15 @@ namespace Xwt.GtkBackend
 
 		public override object GetNativeWindow (IWindowFrameBackend backend)
 		{
-			if (backend.Window is Gtk.Window)
-				return backend.Window;
-			if (Platform.IsMac)
-				return GtkMacInterop.GetGtkWindow (backend.Window);
-			return null;
+			return backend.Window as Gtk.Window;
 		}
 
 		public override object GetBackendForImage (object nativeImage)
 		{
 			if (nativeImage is Gdk.Pixbuf)
 				return new GtkImage ((Gdk.Pixbuf)nativeImage);
+			else if (nativeImage is Gdk.Texture)
+				return new GtkImage ((Gdk.Texture)nativeImage);
 			else if (nativeImage is string)
 				return new GtkImage ((string)nativeImage);
 			else if (nativeImage is GtkImage)
@@ -297,11 +393,11 @@ namespace Xwt.GtkBackend
 			Gtk.Widget w = (Gtk.Widget)nativeWidget;
 			return new CairoContextBackend (Util.GetScaleFactor (w)) { Context = (Cairo.Context)nativeContext };
 		}
-		
+
 		public override object GetNativeParentWindow (Widget w)
 		{
 			IGtkWidgetBackend wb = (IGtkWidgetBackend)Toolkit.GetBackend (w);
-			return wb.Widget.Toplevel as Gtk.Window;
+			return wb.Widget.Root as Gtk.Window;
 		}
 
 		public override bool HasNativeParent (Widget w)
@@ -313,31 +409,36 @@ namespace Xwt.GtkBackend
 		public override void DispatchPendingEvents ()
 		{
 			// The loop is limited to 1000 iterations as a workaround for an issue that some users
-			// have experienced. Sometimes EventsPending starts return 'true' for all iterations,
+			// have experienced. Sometimes Pending starts return 'true' for all iterations,
 			// causing the loop to never end.
-
 			int n = 1000;
-			Gdk.Threads.Enter();
-			
-			while (Gtk.Application.EventsPending () && --n > 0) {
-				Gtk.Application.RunIteration (false);
-			}
-			
-			Gdk.Threads.Leave();
+			var context = GLib.MainContext.Default;
+			while (GLib.MainContext.Pending () && --n > 0)
+				context.RunIteration (false);
 		}
 
 		public override object RenderWidget (Widget widget)
 		{
 			var w = ((WidgetBackend)widget.GetBackend ()).Widget;
-			Gdk.Window win = w.GdkWindow;
-			if (win != null && win.IsViewable) {
-				int ww, wh;
-				win.GetSize (out ww, out wh);
-				if (ww == w.Allocation.Width && wh == w.Allocation.Height)
-					return new GtkImage (win.ToPixbuf (0, 0, w.Allocation.Width, w.Allocation.Height));
-				return new GtkImage (win.ToPixbuf (w.Allocation.X, w.Allocation.Y, w.Allocation.Width, w.Allocation.Height));
+			int width = w.Width, height = w.Height;
+			if (!w.IsMapped || width <= 0 || height <= 0)
+				throw new InvalidOperationException ();
+
+			var scale = Util.GetScaleFactor (w);
+			var paintable = new Gtk.WidgetPaintable (w);
+			var snapshot = new Gtk.Snapshot ();
+			paintable.Snapshot (snapshot, width, height);
+			var node = snapshot.FreeToNode ();
+			using (var surface = new Cairo.ImageSurface (Cairo.Format.Argb32, (int)(width * scale), (int)(height * scale))) {
+				if (node != null) {
+					using (var cr = new Cairo.Context (surface)) {
+						cr.Scale (scale, scale);
+						node.Draw (cr);
+					}
+				}
+				var frame = new GtkImage.ImageFrame (surface.ToPixbuf (), width, height, true);
+				return new GtkImage (new [] { frame });
 			}
-			throw new InvalidOperationException ();
 		}
 
 		public override void RenderImage (object nativeWidget, object nativeContext, ImageDescription img, double x, double y)
@@ -355,28 +456,19 @@ namespace Xwt.GtkBackend
 			if (widget == null)
 				throw new InvalidOperationException ("Widget belongs to a different toolkit");
 
-			int x = 0, y = 0;
-			widget.GdkWindow?.GetOrigin (out x, out y);
-			var a = widget.Allocation;
-			x += a.X;
-			y += a.Y;
-			return new Rectangle (x, y, widget.Allocation.Width, widget.Allocation.Height);
+			var origin = GtkWorkarounds.ConvertToScreenCoordinates (widget, Point.Zero);
+			return new Rectangle (origin.X, origin.Y, widget.Width, widget.Height);
 		}
 
 		public override ToolkitFeatures SupportedFeatures {
 			get {
 				var f = ToolkitFeatures.All;
-
-				if (GtkWorkarounds.GtkMajorVersion <= 2 ||
-				    GtkWorkarounds.GtkMajorVersion == 3 && GtkWorkarounds.GtkMinorVersion < 8)
-					f &= ~ToolkitFeatures.WidgetOpacity;
-
+				// GTK 4 has no window opacity on Windows and no client-side window positioning
 				if (Platform.IsWindows)
 					f &= ~ToolkitFeatures.WindowOpacity;
 				return f;
 			}
 		}
-
 
 		protected override Type GetBackendImplementationType (Type backendType)
 		{
@@ -388,10 +480,13 @@ namespace Xwt.GtkBackend
 			return base.GetBackendImplementationType (backendType);
 		}
 	}
-	
+
+	/// <summary>
+	/// Implemented by backend-owned container widgets so children can be swapped/removed generically.
+	/// </summary>
 	public interface IGtkContainer
 	{
 		void ReplaceChild (Gtk.Widget oldWidget, Gtk.Widget newWidget);
+		void RemoveChild (Gtk.Widget child);
 	}
 }
-

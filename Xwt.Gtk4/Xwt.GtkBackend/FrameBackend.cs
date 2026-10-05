@@ -210,10 +210,5 @@ namespace Xwt.GtkBackend
 			width = height = SizeConstraint.Unconstrained;
 		}
 	}
-
-	public interface IConstraintProvider
-	{
-		void GetConstraints (Gtk.Widget target, out SizeConstraint width, out SizeConstraint height);
-	}
 }
 

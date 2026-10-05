@@ -25,42 +25,143 @@
 // THE SOFTWARE.
 
 using System;
-using Gtk;
-using System.Runtime.InteropServices;
 using System.Collections.Generic;
+using System.IO;
+using System.Runtime.InteropServices;
 using Xwt.Drawing;
 
 namespace Xwt.GtkBackend
 {
-	public static class GtkInterop
+	/// <summary>Native libraries of the GTK 4 stack, for the few symbols GtkSharp4 does not bind.</summary>
+	public enum NativeLib
 	{
-		internal const string LIBATK          = "libatk-1.0-0.dll";
-		internal const string LIBGLIB         = "libglib-2.0-0.dll";
-		internal const string LIBGOBJECT      = "libgobject-2.0-0.dll";
-		internal const string LIBPANGO        = "libpango-1.0-0.dll";
-		internal const string LIBPANGOCAIRO   = "libpangocairo-1.0-0.dll";
-		internal const string LIBFONTCONFIG   = "fontconfig";
-
-		internal const string LIBGTK          = "libgtk-3-0.dll";
-		internal const string LIBGDK          = "libgdk-3-0.dll";
-		internal const string LIBGTKGLUE      = "gtksharpglue-3";
-		internal const string LIBGLIBGLUE     = "glibsharpglue-3";
-		internal const string LIBWEBKIT       = "libwebkitgtk-3.0-0.dll";
+		GLib,
+		GObject,
+		Gio,
+		Pango,
+		PangoCairo,
+		Cairo,
+		GdkPixbuf,
+		Gtk,
+		Webkit,
 	}
 
 	/// <summary>
-	/// This creates a Pango list and applies attributes to it with *much* less overhead than the GTK# version.
+	/// Resolves native symbols the same way GtkSharp4 does (library handle + symbol lookup), so no
+	/// platform-specific DllImport names are baked in. GtkSharp4 has already loaded these libraries,
+	/// so the lookups return the existing modules.
+	/// </summary>
+	public static class GtkInterop
+	{
+		static readonly Dictionary<NativeLib, string[]> names = new Dictionary<NativeLib, string[]> {
+			{ NativeLib.GLib, new[] { "glib-2.0-0.dll", "libglib-2.0.so.0", "libglib-2.0.0.dylib", "libglib-2.0-0.dll" } },
+			{ NativeLib.GObject, new[] { "gobject-2.0-0.dll", "libgobject-2.0.so.0", "libgobject-2.0.0.dylib", "libgobject-2.0-0.dll" } },
+			{ NativeLib.Gio, new[] { "gio-2.0-0.dll", "libgio-2.0.so.0", "libgio-2.0.0.dylib", "libgio-2.0-0.dll" } },
+			{ NativeLib.Pango, new[] { "pango-1.0-0.dll", "libpango-1.0.so.0", "libpango-1.0.0.dylib", "libpango-1.0-0.dll" } },
+			{ NativeLib.PangoCairo, new[] { "pangocairo-1.0-0.dll", "libpangocairo-1.0.so.0", "libpangocairo-1.0.0.dylib", "libpangocairo-1.0-0.dll" } },
+			{ NativeLib.Cairo, new[] { "cairo-2.dll", "libcairo.so.2", "libcairo.2.dylib", "libcairo-2.dll" } },
+			{ NativeLib.GdkPixbuf, new[] { "gdk_pixbuf-2.0-0.dll", "libgdk_pixbuf-2.0.so.0", "libgdk_pixbuf-2.0.dylib", "libgdk_pixbuf-2.0-0.dll" } },
+			{ NativeLib.Gtk, new[] { "gtk-4-1.dll", "libgtk-4.so.1", "libgtk-4.1.dylib", "libgtk-4-1.dll" } },
+			{ NativeLib.Webkit, new[] { "webkitgtk-6.0-4.dll", "libwebkitgtk-6.0.so.4", "libwebkitgtk-6.0.dylib" } },
+		};
+		static readonly Dictionary<NativeLib, IntPtr> handles = new Dictionary<NativeLib, IntPtr> ();
+
+		[DllImport ("kernel32.dll", EntryPoint = "LoadLibraryW", CharSet = CharSet.Unicode)]
+		static extern IntPtr LoadLibraryW (string name);
+		[DllImport ("kernel32.dll", EntryPoint = "GetProcAddress", CharSet = CharSet.Ansi)]
+		static extern IntPtr GetProcAddressW (IntPtr module, string name);
+		[DllImport ("libdl.so.2", EntryPoint = "dlopen")]
+		static extern IntPtr dlopen_linux (string path, int flags);
+		[DllImport ("libdl.so.2", EntryPoint = "dlsym")]
+		static extern IntPtr dlsym_linux (IntPtr handle, string symbol);
+		[DllImport ("/usr/lib/libSystem.dylib", EntryPoint = "dlopen")]
+		static extern IntPtr dlopen_mac (string path, int flags);
+		[DllImport ("/usr/lib/libSystem.dylib", EntryPoint = "dlsym")]
+		static extern IntPtr dlsym_mac (IntPtr handle, string symbol);
+
+		static IntPtr Open (string name)
+		{
+			try {
+				if (Platform.IsWindows)
+					return LoadLibraryW (name);
+				if (Platform.IsMac)
+					return dlopen_mac (name, 1);
+				return dlopen_linux (name, 1);
+			} catch (DllNotFoundException) {
+				return IntPtr.Zero;
+			} catch (EntryPointNotFoundException) {
+				return IntPtr.Zero;
+			}
+		}
+
+		static IntPtr GetLibrary (NativeLib lib)
+		{
+			lock (handles) {
+				IntPtr h;
+				if (handles.TryGetValue (lib, out h))
+					return h;
+				var candidates = names [lib];
+				int preferred = Platform.IsWindows ? 0 : Platform.IsMac ? 2 : 1;
+				h = preferred < candidates.Length ? Open (candidates [preferred]) : IntPtr.Zero;
+				if (h == IntPtr.Zero && Platform.IsWindows) {
+					var dir = Path.Combine (Environment.GetFolderPath (Environment.SpecialFolder.LocalApplicationData), "Gtk", "4.22.4", "bin");
+					h = Open (Path.Combine (dir, candidates [0]));
+				}
+				for (int i = 0; h == IntPtr.Zero && i < candidates.Length; i++)
+					h = Open (candidates [i]);
+				handles [lib] = h;
+				return h;
+			}
+		}
+
+		/// <summary>Returns the native function as a delegate, or null if the library or symbol is missing.</summary>
+		public static T LoadFunction<T> (NativeLib lib, string symbol) where T : class
+		{
+			var h = GetLibrary (lib);
+			if (h == IntPtr.Zero)
+				return null;
+			IntPtr f;
+			if (Platform.IsWindows)
+				f = GetProcAddressW (h, symbol);
+			else if (Platform.IsMac)
+				f = dlsym_mac (h, symbol);
+			else
+				f = dlsym_linux (h, symbol);
+			if (f == IntPtr.Zero)
+				return null;
+			return Marshal.GetDelegateForFunctionPointer (f, typeof (T)) as T;
+		}
+
+		public static bool IsAvailable (NativeLib lib)
+		{
+			return GetLibrary (lib) != IntPtr.Zero;
+		}
+	}
+
+	/// <summary>
+	/// Builds a Pango attribute list from Xwt text attributes.
 	/// </summary>
 	internal class FastPangoAttrList : IDisposable
 	{
 		const float PangoScale = 1024;
 
-		IntPtr list;
-		public Gdk.Color DefaultLinkColor = Toolkit.CurrentEngine.Defaults.FallbackLinkColor.ToGtkValue ();
+		[UnmanagedFunctionPointer (CallingConvention.Cdecl)]
+		delegate IntPtr d_pango_attr_size_new_absolute (int size);
+		// PangoSharp4's AttrSize(int, bool absolute) maps the flag backwards, so the absolute size
+		// attribute is created directly.
+		static readonly d_pango_attr_size_new_absolute pango_attr_size_new_absolute =
+			GtkInterop.LoadFunction<d_pango_attr_size_new_absolute> (NativeLib.Pango, "pango_attr_size_new_absolute");
+
+		Pango.AttrList list;
+		public Pango.Color DefaultLinkColor = Toolkit.CurrentEngine.Defaults.FallbackLinkColor.ToPangoColor ();
 
 		public FastPangoAttrList ()
 		{
-			list = pango_attr_list_new ();
+			list = new Pango.AttrList ();
+		}
+
+		public Pango.AttrList List {
+			get { return list; }
 		}
 
 		public void AddAttributes (TextIndexer indexer, IEnumerable<TextAttribute> attrs)
@@ -76,161 +177,60 @@ namespace Xwt.GtkBackend
 
 			if (attr is BackgroundTextAttribute) {
 				var xa = (BackgroundTextAttribute)attr;
-				AddBackgroundAttribute (xa.Color.ToGtkValue (), start, end);
+				Add (new Pango.AttrBackground (xa.Color.ToPangoColor ()), start, end);
 			}
 			else if (attr is ColorTextAttribute) {
 				var xa = (ColorTextAttribute)attr;
-				AddForegroundAttribute (xa.Color.ToGtkValue (), start, end);
+				Add (new Pango.AttrForeground (xa.Color.ToPangoColor ()), start, end);
 			}
 			else if (attr is FontWeightTextAttribute) {
 				var xa = (FontWeightTextAttribute)attr;
-				AddWeightAttribute ((Pango.Weight)(int)xa.Weight, start, end);
-			} 
+				Add (new Pango.AttrWeight ((Pango.Weight)(int)xa.Weight), start, end);
+			}
 			else if (attr is FontSizeTextAttribute) {
 				var xa = (FontSizeTextAttribute)attr;
 				AddFontSizeAttribute ((int) (xa.Size * PangoScale), start, end);
-			} 
+			}
 			else if (attr is FontStyleTextAttribute) {
 				var xa = (FontStyleTextAttribute)attr;
-				AddStyleAttribute ((Pango.Style)(int)xa.Style, start, end);
+				Add (new Pango.AttrStyle ((Pango.Style)(int)xa.Style), start, end);
 			}
 			else if (attr is UnderlineTextAttribute) {
 				var xa = (UnderlineTextAttribute)attr;
-				AddUnderlineAttribute (xa.Underline ? Pango.Underline.Single : Pango.Underline.None, start, end);
+				Add (new Pango.AttrUnderline (xa.Underline ? Pango.Underline.Single : Pango.Underline.None), start, end);
 			}
 			else if (attr is StrikethroughTextAttribute) {
 				var xa = (StrikethroughTextAttribute)attr;
-				AddStrikethroughAttribute (xa.Strikethrough, start, end);
+				Add (new Pango.AttrStrikethrough (xa.Strikethrough), start, end);
 			}
 			else if (attr is FontTextAttribute) {
 				var xa = (FontTextAttribute)attr;
-				AddFontAttribute ((Pango.FontDescription)Toolkit.GetBackend (xa.Font), start, end);
+				Add (new Pango.AttrFontDesc ((Pango.FontDescription)Toolkit.GetBackend (xa.Font)), start, end);
 			}
 			else if (attr is LinkTextAttribute) {
-				// TODO: support "link-color" style prop for TextLayoutBackendHandler and CellRendererText
-				AddUnderlineAttribute (Pango.Underline.Single, start, end);
-				AddForegroundAttribute (DefaultLinkColor, start, end);
+				Add (new Pango.AttrUnderline (Pango.Underline.Single), start, end);
+				Add (new Pango.AttrForeground (DefaultLinkColor), start, end);
 			}
-		}
-
-		public IntPtr Handle {
-			get { return list; }
-		}
-
-		public void AddStyleAttribute (Pango.Style style, uint start, uint end)
-		{
-			Add (pango_attr_style_new (style), start, end);
-		}
-
-		public void AddWeightAttribute (Pango.Weight weight, uint start, uint end)
-		{
-			Add (pango_attr_weight_new (weight), start, end);
-		}
-
-		public void AddForegroundAttribute (Gdk.Color color, uint start, uint end)
-		{
-			Add (pango_attr_foreground_new (color.Red, color.Green, color.Blue), start, end);
-		}
-
-		public void AddBackgroundAttribute (Gdk.Color color, uint start, uint end)
-		{
-			Add (pango_attr_background_new (color.Red, color.Green, color.Blue), start, end);
-		}
-
-		public void AddUnderlineAttribute (Pango.Underline underline, uint start, uint end)
-		{
-			Add (pango_attr_underline_new (underline), start, end);
-		}
-
-		public void AddStrikethroughAttribute (bool strikethrough, uint start, uint end)
-		{
-			Add (pango_attr_strikethrough_new (strikethrough), start, end);
 		}
 
 		public void AddFontSizeAttribute (int size, uint start, uint end)
 		{
-			Add (pango_attr_size_new_absolute (size), start, end);
+			var raw = pango_attr_size_new_absolute (size);
+			Add (Pango.Attribute.GetAttribute (raw, true), start, end);
 		}
 
-		public void AddFontAttribute (Pango.FontDescription font, uint start, uint end)
+		void Add (Pango.Attribute attribute, uint start, uint end)
 		{
-			Add (pango_attr_font_desc_new (font.Handle), start, end);
-		}
-
-		void Add (IntPtr attribute, uint start, uint end)
-		{
-			unsafe {
-				PangoAttribute *attPtr = (PangoAttribute *) attribute;
-				attPtr->start_index = start;
-				attPtr->end_index = end;
-			}
-			pango_attr_list_insert (list, attribute);
-		}
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention = CallingConvention.Cdecl)]
-		static extern IntPtr pango_attr_size_new_absolute (int size);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern IntPtr pango_attr_style_new (Pango.Style style);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern IntPtr pango_attr_stretch_new (Pango.Stretch stretch);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern IntPtr pango_attr_weight_new (Pango.Weight weight);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern IntPtr pango_attr_foreground_new (ushort red, ushort green, ushort blue);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern IntPtr pango_attr_background_new (ushort red, ushort green, ushort blue);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern IntPtr pango_attr_underline_new (Pango.Underline underline);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern IntPtr pango_attr_strikethrough_new (bool strikethrough);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern IntPtr pango_attr_font_desc_new (IntPtr desc);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern IntPtr pango_attr_list_new ();
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern void pango_attr_list_unref (IntPtr list);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern void pango_attr_list_insert (IntPtr list, IntPtr attr);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern void pango_layout_set_attributes (IntPtr layout, IntPtr attrList);
-
-		[DllImport (GtkInterop.LIBPANGO, CallingConvention=CallingConvention.Cdecl)]
-		static extern void pango_attr_list_splice (IntPtr attr_list, IntPtr other, Int32 pos, Int32 len);
-
-		public void Splice (Pango.AttrList attrs, int pos, int len)
-		{
-			pango_attr_list_splice (list, attrs.Handle, pos, len);
-		}
-
-		public void AssignTo (Pango.Layout layout)
-		{
-			pango_layout_set_attributes (layout.Handle, list);
-		}
-
-		[StructLayout (LayoutKind.Sequential)]
-		struct PangoAttribute
-		{
-			public IntPtr klass;
-			public uint start_index;
-			public uint end_index;
+			attribute.StartIndex = start;
+			attribute.EndIndex = end;
+			// AttrList.Insert copies the attribute
+			list.Insert (attribute);
+			attribute.Dispose ();
 		}
 
 		public void Dispose ()
 		{
-			pango_attr_list_unref (list);
-			list = IntPtr.Zero;
+			list = null;
 		}
 	}
 

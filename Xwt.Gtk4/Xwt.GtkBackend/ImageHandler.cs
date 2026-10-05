@@ -1,21 +1,21 @@
-// 
+//
 // ImageHandler.cs
-//  
+//
 // Author:
 //       Lluis Sanchez <lluis@xamarin.com>
-// 
+//
 // Copyright (c) 2011 Xamarin Inc
-// 
+//
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
 // in the Software without restriction, including without limitation the rights
 // to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 // copies of the Software, and to permit persons to whom the Software is
 // furnished to do so, subject to the following conditions:
-// 
+//
 // The above copyright notice and this permission notice shall be included in
 // all copies or substantial portions of the Software.
-// 
+//
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -95,11 +95,11 @@ namespace Xwt.GtkBackend
 		{
 			return ApplicationContext.Toolkit.WrapImage (Util.ToGtkStock (id));
 		}
-		
+
 		public override void SetBitmapPixel (object handle, int x, int y, Xwt.Drawing.Color color)
 		{
 			var pix = ((GtkImage)handle).Frames[0].Pixbuf;
-			
+
 			unsafe {
 				byte* p = (byte*) pix.Pixels;
 				p += y * pix.Rowstride + x * pix.NChannels;
@@ -109,18 +109,18 @@ namespace Xwt.GtkBackend
 				p[3] = (byte)(color.Alpha * 255);
 			}
 		}
-		
+
 		public override Xwt.Drawing.Color GetBitmapPixel (object handle, int x, int y)
 		{
 			var pix = ((GtkImage)handle).Frames[0].Pixbuf;
-			
+
 			unsafe {
 				byte* p = (byte*) pix.Pixels;
 				p += y * pix.Rowstride + x * pix.NChannels;
 				return Xwt.Drawing.Color.FromBytes (p[0], p[1], p[2], p[3]);
 			}
 		}
-		
+
 		public override void Dispose (object backend)
 		{
 			((GtkImage)backend).Dispose ();
@@ -143,20 +143,20 @@ namespace Xwt.GtkBackend
 			var pix = handle as GtkImage;
 			return pix.DefaultSize;
 		}
-		
+
 		public override object CopyBitmap (object handle)
 		{
 			var pix = ((GtkImage)handle).Frames[0].Pixbuf;
 			return new GtkImage (pix.Copy ());
 		}
-		
+
 		public override void CopyBitmapArea (object srcHandle, int srcX, int srcY, int width, int height, object destHandle, int destX, int destY)
 		{
 			var pixSrc = ((GtkImage)srcHandle).Frames[0].Pixbuf;
 			var pixDst = ((GtkImage)destHandle).Frames[0].Pixbuf;
 			pixSrc.CopyArea (srcX, srcY, width, height, pixDst, destX, destY);
 		}
-		
+
 		public override object CropBitmap (object handle, int srcX, int srcY, int width, int height)
 		{
 			var pix = ((GtkImage)handle).Frames[0].Pixbuf;
@@ -165,7 +165,7 @@ namespace Xwt.GtkBackend
 			pix.CopyArea (srcX, srcY, width, height, res, 0, 0);
 			return new GtkImage (res);
 		}
-		
+
 		public override bool IsBitmap (object handle)
 		{
 			var img = (GtkImage) handle;
@@ -179,53 +179,85 @@ namespace Xwt.GtkBackend
 			return new GtkImage (new GtkImage.ImageFrame [] { f });
 		}
 
-		internal static Gdk.Pixbuf CreateBitmap (string stockId, double width, double height, double scaleFactor)
+		/// <summary>
+		/// Renders a themed icon (icon name) at the requested logical size and scale.
+		/// </summary>
+		internal static Gdk.Pixbuf CreateBitmap (string iconName, double width, double height, double scaleFactor)
 		{
 			Gdk.Pixbuf result = null;
 
-			Gtk.IconSet iconset = Gtk.IconFactory.LookupDefault (stockId);
-			if (iconset != null) {
-				// Find the size that better fits the requested size
-				Gtk.IconSize gsize = Util.GetBestSizeFit (width);
-				result = iconset.RenderIcon (Gtk.Widget.DefaultStyle, Gtk.TextDirection.Ltr, Gtk.StateType.Normal, gsize, null, null, scaleFactor);
-				if (result == null || result.Width < width * scaleFactor) {
-					var gsize2x = Util.GetBestSizeFit (width * scaleFactor, iconset.Sizes);
-					if (gsize2x != Gtk.IconSize.Invalid && gsize2x != gsize)
-						// Don't dispose the previous result since the icon is owned by the IconSet
-						result = iconset.RenderIcon (Gtk.Widget.DefaultStyle, Gtk.TextDirection.Ltr, Gtk.StateType.Normal, gsize2x, null, null);
-				}
+			var display = Gdk.Display.Default;
+			var theme = display != null ? Gtk.IconTheme.GetForDisplay (display) : null;
+			if (theme != null && theme.HasIcon (iconName)) {
+				var paintable = theme.LookupIcon (iconName, null, (int)Math.Max (width, height), (int)Math.Ceiling (scaleFactor), Gtk.TextDirection.Ltr, (Gtk.IconLookupFlags)0);
+				if (paintable != null)
+					result = RenderPaintable (paintable, width, height, scaleFactor);
 			}
-			
-			if (result == null && Gtk.IconTheme.Default.HasIcon (stockId))
-				result = Gtk.IconTheme.Default.LoadIcon (stockId, (int)width, (Gtk.IconLookupFlags)0);
 
 			if (result == null)
 			{
-				// render a custom gtk-missing-image icon 
-				// if Gtk.Stock.MissingImage is not found 
+				// render a custom missing-image icon
 				int w = (int)width;
 				int h = (int)height;
-				Cairo.ImageSurface s = new Cairo.ImageSurface(Cairo.Format.ARGB32, w, h);
-				Cairo.Context cr = new Cairo.Context(s);
-				cr.SetSourceRGB(255, 255, 255);
-				cr.Rectangle(0, 0, w, h);
-				cr.Fill();
-				cr.SetSourceRGB(0, 0, 0);
-				cr.LineWidth = 1;
-				cr.Rectangle(0.5, 0.5, w - 1, h - 1);
-				cr.Stroke();
-				cr.SetSourceRGB(255, 0, 0);
-				cr.LineWidth = 3;
-				cr.LineCap = Cairo.LineCap.Round;
-				cr.LineJoin = Cairo.LineJoin.Round;
-				cr.MoveTo(w / 4, h / 4);
-				cr.LineTo((w - 1) - w / 4, (h - 1) - h / 4);
-				cr.MoveTo(w / 4, (h - 1) - h / 4);
-				cr.LineTo((w - 1) - w / 4, h / 4);
-				cr.Stroke();
-				result = Gtk3Extensions.GetFromSurface(s, 0, 0, w, h);
+				using (var s = new Cairo.ImageSurface(Cairo.Format.Argb32, w, h))
+				using (var cr = new Cairo.Context(s)) {
+					cr.SetSourceRGB(255, 255, 255);
+					cr.Rectangle(0, 0, w, h);
+					cr.Fill();
+					cr.SetSourceRGB(0, 0, 0);
+					cr.LineWidth = 1;
+					cr.Rectangle(0.5, 0.5, w - 1, h - 1);
+					cr.Stroke();
+					cr.SetSourceRGB(255, 0, 0);
+					cr.LineWidth = 3;
+					cr.LineCap = Cairo.LineCap.Round;
+					cr.LineJoin = Cairo.LineJoin.Round;
+					cr.MoveTo(w / 4, h / 4);
+					cr.LineTo((w - 1) - w / 4, (h - 1) - h / 4);
+					cr.MoveTo(w / 4, (h - 1) - h / 4);
+					cr.LineTo((w - 1) - w / 4, h / 4);
+					cr.Stroke();
+					result = s.ToPixbuf ();
+				}
 			}
 			return result;
+		}
+
+		/// <summary>
+		/// Renders any GDK paintable (icon, texture, widget paintable) to a pixbuf.
+		/// </summary>
+		internal static Gdk.Pixbuf RenderPaintable (Gdk.IPaintable paintable, double width, double height, double scaleFactor)
+		{
+			int pw = Math.Max (1, (int)Math.Ceiling (width * scaleFactor));
+			int ph = Math.Max (1, (int)Math.Ceiling (height * scaleFactor));
+			var snapshot = new Gtk.Snapshot ();
+			paintable.Snapshot (snapshot, width, height);
+			var node = snapshot.FreeToNode ();
+			using (var surface = new Cairo.ImageSurface (Cairo.Format.Argb32, pw, ph)) {
+				if (node != null) {
+					using (var cr = new Cairo.Context (surface)) {
+						cr.Scale (scaleFactor, scaleFactor);
+						node.Draw (cr);
+					}
+				}
+				return surface.ToPixbuf ();
+			}
+		}
+
+		/// <summary>Converts a texture to a pixbuf (via a Cairo surface download).</summary>
+		internal static Gdk.Pixbuf TextureToPixbuf (Gdk.Texture texture)
+		{
+			int w = texture.Width, h = texture.Height;
+			using (var surface = new Cairo.ImageSurface (Cairo.Format.Argb32, w, h)) {
+				surface.Flush ();
+				var data = texture.Download ();
+				var stride = surface.Stride;
+				// gdk_texture_download writes CAIRO_FORMAT_ARGB32 rows of 4*w bytes
+				for (int row = 0; row < h; row++)
+					System.Runtime.InteropServices.Marshal.Copy (data, row * w * 4, surface.DataPtr + row * stride, w * 4);
+				surface.MarkDirty ();
+				return surface.ToPixbuf ();
+			}
 		}
 	}
 
@@ -269,12 +301,22 @@ namespace Xwt.GtkBackend
 		{
 			this.frames = new ImageFrame [] { new ImageFrame (img, true) };
 		}
-		
-		public GtkImage (string stockId)
+
+		public GtkImage (Gdk.Texture texture): this (ImageHandler.TextureToPixbuf (texture))
 		{
-			this.stockId = stockId;
 		}
-		
+
+		/// <summary>Image rendered from the icon theme.</summary>
+		public GtkImage (string iconName)
+		{
+			this.stockId = iconName;
+		}
+
+		/// <summary>The icon theme name, for images created from an icon name.</summary>
+		public string IconName {
+			get { return stockId; }
+		}
+
 		public GtkImage (IEnumerable<Gdk.Pixbuf> frames)
 		{
 			this.frames = frames.Select (p => new ImageFrame (p, true)).ToArray ();
@@ -338,14 +380,14 @@ namespace Xwt.GtkBackend
 
 				if ( best == null ||
 				    (bestResolutionMatch < 1 && resolutionMatch > bestResolutionMatch) ||
-				    (bestResolutionMatch >= 1 && resolutionMatch >= 1 && resolutionMatch <= bestResolutionMatch && (sizeMatch >= bestSizeMatch))) 
+				    (bestResolutionMatch >= 1 && resolutionMatch >= 1 && resolutionMatch <= bestResolutionMatch && (sizeMatch >= bestSizeMatch)))
 				{
 					best = f.Pixbuf;
 					bestSizeMatch = sizeMatch;
 					bestResolutionMatch = resolutionMatch;
 				}
 			}
-			
+
 			return best;
 		}
 
@@ -357,6 +399,17 @@ namespace Xwt.GtkBackend
 		public Gdk.Pixbuf ToPixbuf (ApplicationContext actx, Gtk.Widget w)
 		{
 			return GetBestFrame (actx, Util.GetScaleFactor (w), DefaultSize.Width, DefaultSize.Height, true);
+		}
+
+		/// <summary>Texture of the best frame for the widget's scale, for GTK 4 widgets taking a paintable.</summary>
+		public Gdk.Texture ToTexture (ApplicationContext actx, Gtk.Widget w)
+		{
+			return new Gdk.Texture (ToPixbuf (actx, w));
+		}
+
+		public Gdk.Texture ToTexture (ApplicationContext actx, double scaleFactor, ImageDescription idesc)
+		{
+			return new Gdk.Texture (GetBestFrame (actx, scaleFactor, idesc, true));
 		}
 
 		public Gdk.Pixbuf GetBestFrame (ApplicationContext actx, Gtk.Widget w, double width, double height, bool forceExactSize)
@@ -388,7 +441,7 @@ namespace Xwt.GtkBackend
 			var swidth = Math.Max ((int)(idesc.Size.Width * scaleFactor), 1);
 			var sheight = Math.Max ((int)(idesc.Size.Height * scaleFactor), 1);
 
-			using (var sf = new Cairo.ImageSurface (Cairo.Format.ARGB32, swidth, sheight))
+			using (var sf = new Cairo.ImageSurface (Cairo.Format.Argb32, swidth, sheight))
 			using (var ctx = new Cairo.Context (sf)) {
 				ctx.Scale (scaleFactor, scaleFactor);
 				Draw (actx, ctx, scaleFactor, 0, 0, idesc);
@@ -408,7 +461,7 @@ namespace Xwt.GtkBackend
 				frames [frames.Length - 1] = frame;
 			}
 		}
-		
+
 		public void Draw (ApplicationContext actx, Cairo.Context ctx, double scaleFactor, double x, double y, ImageDescription idesc)
 		{
 			if (stockId != null) {
@@ -474,7 +527,8 @@ namespace Xwt.GtkBackend
 		}
 	}
 
-	public class ImageBox: GtkDrawingArea
+	/// <summary>Widget showing an Xwt image (drawn with Cairo in the snapshot).</summary>
+	public class ImageBox: Gtk.Widget
 	{
 		ImageDescription image;
 		ApplicationContext actx;
@@ -487,18 +541,15 @@ namespace Xwt.GtkBackend
 
 		public ImageBox (ApplicationContext actx)
 		{
-			this.SetHasWindow (false);
-			this.SetAppPaintable (true);
 			this.actx = actx;
-			Accessible.Role = Atk.Role.Image;
 		}
 
 		public ImageDescription Image {
 			get { return image; }
-			set { 
+			set {
 				image = value;
-				SetSizeRequest ((int)image.Size.Width, (int)image.Size.Height);
 				QueueResize ();
+				QueueDraw ();
 			}
 		}
 
@@ -512,35 +563,36 @@ namespace Xwt.GtkBackend
 			set { xalign = value; QueueDraw (); }
 		}
 
-		protected override void OnSizeRequested (ref Gtk.Requisition requisition)
+		protected override Gtk.SizeRequestMode OnGetRequestMode ()
 		{
-			base.OnSizeRequested (ref requisition);
-			if (!image.IsNull) {
-				requisition.Width = (int) image.Size.Width;
-				requisition.Height = (int) image.Size.Height;
-			}
+			return Gtk.SizeRequestMode.ConstantSize;
 		}
 
-		protected override bool OnDrawn (Cairo.Context cr)
+		protected override void OnMeasure (Gtk.Orientation orientation, int for_size, out int minimum, out int natural, out int minimum_baseline, out int natural_baseline)
+		{
+			minimum = natural = 0;
+			if (!image.IsNull)
+				minimum = natural = (int)(orientation == Gtk.Orientation.Horizontal ? image.Size.Width : image.Size.Height);
+			minimum_baseline = natural_baseline = -1;
+		}
+
+		protected override void OnSnapshot (Gtk.Snapshot snapshot)
 		{
 			if (image.IsNull)
-				return true;
-			var a = Allocation;
+				return;
+			int width = Width, height = Height;
+			if (width <= 0 || height <= 0)
+				return;
 
-			// HACK: Gtk sends sometimes an expose/draw event while the widget reallocates.
-			//       In that case we would draw in the wrong area, which may lead to artifacts
-			//       if no other widget updates it. Alternative: we could clip the
-			//       allocation bounds, but this may have other issues.
-			if (a.Width == 1 && a.Height == 1 && a.X == -1 && a.Y == -1) // the allocation coordinates on reallocation
-				return base.OnDrawn (cr);
-
-			int x = (int)(((float)a.Width - (float)image.Size.Width) * xalign);
-			int y = (int)(((float)a.Height - (float)image.Size.Height) * yalign);
+			int x = (int)(((float)width - (float)image.Size.Width) * xalign);
+			int y = (int)(((float)height - (float)image.Size.Height) * yalign);
 			if (x < 0) x = 0;
 			if (y < 0) y = 0;
-			((GtkImage)image.Backend).Draw (actx, cr, Util.GetScaleFactor (this), x, y, image);
-			return base.OnDrawn (cr);
+
+			var bounds = Graphene.Rect.Alloc ();
+			bounds.Init (0, 0, width, height);
+			using (var cr = snapshot.AppendCairo (bounds))
+				((GtkImage)image.Backend).Draw (actx, cr, Util.GetScaleFactor (this), x, y, image);
 		}
 	}
 }
-

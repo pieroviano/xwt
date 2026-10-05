@@ -37,14 +37,13 @@ namespace Xwt.GtkBackend
 		public BoxBackend ()
 		{
 			Widget = new CustomContainer () { Backend = this };
-			Widget.Show ();
 		}
-		
+
 		new CustomContainer Widget {
 			get { return (CustomContainer)base.Widget; }
 			set { base.Widget = value; }
 		}
-		
+
 		public void Add (IWidgetBackend widget)
 		{
 			WidgetBackend wb = (WidgetBackend) widget;
@@ -53,9 +52,9 @@ namespace Xwt.GtkBackend
 
 		public void Remove (IWidgetBackend widget)
 		{
-			Widget.Remove (GetWidget (widget));
+			Widget.RemoveChild (GetWidget (widget));
 		}
-		
+
 		public void SetAllocation (IWidgetBackend[] widgets, Rectangle[] rects)
 		{
 			bool changed = false;
@@ -64,52 +63,91 @@ namespace Xwt.GtkBackend
 				if (Widget.SetAllocation (w, rects[n]))
 					changed = true;
 			}
-			if (changed)
-				Widget.QueueResizeIfRequired ();
+			if (changed && !Widget.IsReallocating)
+				Widget.QueueAllocate ();
+		}
+
+		public override Size Size {
+			get { return Widget.AllocatedSize; }
 		}
 	}
-	
-	partial class CustomContainer: Gtk.Container, IGtkContainer
+
+	/// <summary>
+	/// Base for backend widgets that own children: children are attached with
+	/// <c>child.Parent = this</c> and detached with <c>Unparent</c> (GTK 4 has no GtkContainer).
+	/// The default GtkWidget snapshot draws the children.
+	/// </summary>
+	public abstract class ContainerWidget: Gtk.Widget, IGtkContainer
+	{
+		protected ContainerWidget ()
+		{
+		}
+
+		protected ContainerWidget (IntPtr raw): base (raw)
+		{
+		}
+
+		public IEnumerable<Gtk.Widget> Children {
+			get { return this.GetChildren (); }
+		}
+
+		protected void AddChild (Gtk.Widget child)
+		{
+			child.Parent = this;
+			QueueResize ();
+		}
+
+		public virtual void RemoveChild (Gtk.Widget child)
+		{
+			if (child.Parent == this) {
+				child.Unparent ();
+				QueueResize ();
+			}
+		}
+
+		public virtual void ReplaceChild (Gtk.Widget oldWidget, Gtk.Widget newWidget)
+		{
+			newWidget.InsertAfter (this, oldWidget);
+			oldWidget.Unparent ();
+			QueueResize ();
+		}
+
+		protected override void Dispose (bool disposing)
+		{
+			if (disposing && Handle != IntPtr.Zero) {
+				foreach (var c in Children.ToArray ())
+					c.Unparent ();
+			}
+			base.Dispose (disposing);
+		}
+	}
+
+	/// <summary>
+	/// Container whose layout is computed by the Xwt frontend (Box, Table...).
+	/// </summary>
+	partial class CustomContainer: ContainerWidget
 	{
 		public BoxBackend Backend;
 		public bool IsReallocating;
 		Dictionary<Gtk.Widget, WidgetData> children = new Dictionary<Gtk.Widget, WidgetData> ();
-		
+		Size allocatedSize;
+
 		struct WidgetData
 		{
 			public Rectangle Rect;
 			public Widget Widget;
 		}
-		
-		public CustomContainer ()
-		{
-			this.FixContainerLeak ();
-			this.SetHasWindow (false);
-		}
-		
-		public void ReplaceChild (Gtk.Widget oldWidget, Gtk.Widget newWidget)
-		{
-			WidgetData r = children [oldWidget];
-			Remove (oldWidget);
-			Add (newWidget);
-			children [newWidget] = r;
+
+		public Size AllocatedSize {
+			get { return allocatedSize; }
 		}
 
-		void UpdateFocusChain (Orientation orientation)
+		public override void ReplaceChild (Gtk.Widget oldWidget, Gtk.Widget newWidget)
 		{
-			var focusChain = children.Keys.ToArray();
-			Array.Sort (focusChain, (x, y) => {
-				int left, right;
-				if (orientation == Orientation.Horizontal) {
-					left = (int)children[x].Rect.X;
-					right = (int)children[y].Rect.X;
-				} else {
-					left = (int)children[x].Rect.Y;
-					right = (int)children[y].Rect.Y;
-				}
-				return left - right;
-			});
-			FocusChain = focusChain;
+			WidgetData r = children [oldWidget];
+			children.Remove (oldWidget);
+			children [newWidget] = r;
+			base.ReplaceChild (oldWidget, newWidget);
 		}
 
 		public bool SetAllocation (Gtk.Widget w, Rectangle rect)
@@ -119,62 +157,60 @@ namespace Xwt.GtkBackend
 			if (r.Rect != rect) {
 				r.Rect = rect;
 				children [w] = r;
-				UpdateFocusChain (Backend.Frontend is HBox ? Orientation.Horizontal : Orientation.Vertical);
 				return true;
 			} else
 				return false;
 		}
-		
+
 		public void Add (Widget w, Gtk.Widget gw)
 		{
 			children.Add (gw, new WidgetData () { Widget = w, Rect = new Rectangle (0,0,0,0) });
-			Add (gw);
+			AddChild (gw);
 		}
-		
-		protected override void OnAdded (Gtk.Widget widget)
-		{
-			widget.Parent = this;
-		}
-		
-		protected override void OnRemoved (Gtk.Widget widget)
+
+		public override void RemoveChild (Gtk.Widget widget)
 		{
 			children.Remove (widget);
-			widget.Unparent ();
-			QueueResize ();
+			base.RemoveChild (widget);
 		}
 
-		protected void OnReallocate ()
+		protected Size GetPreferredSize (SizeConstraint widthConstraint, SizeConstraint heightConstraint)
 		{
-			((IWidgetSurface)Backend.Frontend).Reallocate ();
+			return Backend.Frontend.Surface.GetPreferredSize (widthConstraint, heightConstraint, true);
 		}
 
-		protected Gtk.Requisition OnGetRequisition (SizeConstraint widthConstraint, SizeConstraint heightConstraint)
+		protected override Gtk.SizeRequestMode OnGetRequestMode ()
 		{
-			var size = Backend.Frontend.Surface.GetPreferredSize (widthConstraint, heightConstraint, true);
-			return size.ToGtkRequisition ();
+			return Gtk.SizeRequestMode.HeightForWidth;
 		}
 
-		protected override void OnSizeAllocated (Gdk.Rectangle allocation)
+		protected override void OnMeasure (Gtk.Orientation orientation, int for_size, out int minimum, out int natural, out int minimum_baseline, out int natural_baseline)
 		{
-			base.OnSizeAllocated (allocation);
+			Size size;
+			if (orientation == Gtk.Orientation.Horizontal) {
+				size = GetPreferredSize (SizeConstraint.Unconstrained, for_size >= 0 ? SizeConstraint.WithSize (for_size) : SizeConstraint.Unconstrained);
+				minimum = natural = Math.Max ((int)size.Width, WidthRequest);
+			} else {
+				size = GetPreferredSize (for_size >= 0 ? SizeConstraint.WithSize (for_size) : SizeConstraint.Unconstrained, SizeConstraint.Unconstrained);
+				minimum = natural = Math.Max ((int)size.Height, HeightRequest);
+			}
+			minimum_baseline = natural_baseline = -1;
+		}
+
+		protected override void OnSizeAllocate (int width, int height, int baseline)
+		{
+			allocatedSize = new Size (width, height);
 			try {
 				IsReallocating = true;
-				OnReallocate ();
+				((IWidgetSurface)Backend.Frontend).Reallocate ();
 			} finally {
 				IsReallocating = false;
 			}
-			foreach (var cr in children.ToArray()) {
+			foreach (var cr in children.ToArray ()) {
 				var r = cr.Value.Rect;
-				cr.Key.SizeAllocate (new Gdk.Rectangle (allocation.X + (int)r.X, allocation.Y + (int)r.Y, (int)r.Width, (int)r.Height));
+				if (cr.Key.Visible)
+					cr.Key.SizeAllocate (new Gdk.Rectangle ((int)r.X, (int)r.Y, (int)r.Width, (int)r.Height), -1);
 			}
-		}
-		
-		protected override void ForAll (bool includeInternals, Gtk.Callback callback)
-		{
-			base.ForAll (includeInternals, callback);
-			foreach (var c in children.Keys.ToArray ())
-				callback (c);
 		}
 	}
 }
-

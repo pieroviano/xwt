@@ -5,27 +5,39 @@ namespace Xwt.GtkBackend
 {
 	public static class Conversion
 	{
-		public static Gtk.IconSize ToGtkValue (Xwt.IconSize size)
+		/// <summary>Pixel size of an Xwt icon size (GTK 4 has no named icon sizes beyond normal/large).</summary>
+		public static int ToPixelSize (this Xwt.IconSize size)
 		{
 			switch (size) {
 			case IconSize.Small:
-				return Gtk.IconSize.Menu;
+				return 16;
 			case IconSize.Medium:
-				return Gtk.IconSize.Button;
+				return 24;
 			case IconSize.Large:
-				return Gtk.IconSize.Dialog;
+				return 48;
 			}
-			return Gtk.IconSize.Dialog;
+			return 48;
 		}
 
-		public static Gdk.Color ToGtkValue (this Xwt.Drawing.Color color)
+		public static Pango.Color ToPangoColor (this Xwt.Drawing.Color color)
 		{
-			return new Gdk.Color ((byte)(color.Red * 255), (byte)(color.Green * 255), (byte)(color.Blue * 255));
+			var c = new Pango.Color ();
+			c.Red = (ushort)(color.Red * ushort.MaxValue);
+			c.Green = (ushort)(color.Green * ushort.MaxValue);
+			c.Blue = (ushort)(color.Blue * ushort.MaxValue);
+			return c;
 		}
 
-		public static Color ToXwtValue (this Gdk.Color color)
+		public static Color ToXwtValue (this Pango.Color color)
 		{
 			return new Color ((double)color.Red / (double)ushort.MaxValue, (double)color.Green / (double)ushort.MaxValue, (double)color.Blue / (double)ushort.MaxValue);
+		}
+
+		/// <summary>CSS color literal, e.g. for a per-widget CssProvider.</summary>
+		public static string ToCssValue (this Xwt.Drawing.Color color)
+		{
+			return string.Format (System.Globalization.CultureInfo.InvariantCulture, "rgba({0},{1},{2},{3})",
+				(int)(color.Red * 255), (int)(color.Green * 255), (int)(color.Blue * 255), color.Alpha);
 		}
 
 		public static Gdk.RGBA ToGtkRgbaValue (this Xwt.Drawing.Color color)
@@ -128,19 +140,11 @@ namespace Xwt.GtkBackend
 				m |= ModifierKeys.Shift;
 			if ((s & Gdk.ModifierType.ControlMask) != 0)
 				m |= ModifierKeys.Control;
-			if ((s & Gdk.ModifierType.Mod1Mask) != 0)
+			if ((s & Gdk.ModifierType.AltMask) != 0)
 				m |= ModifierKeys.Alt;
-			if ((s & Gdk.ModifierType.Mod2Mask) != 0)
+			if ((s & (Gdk.ModifierType.MetaMask | Gdk.ModifierType.SuperMask)) != 0)
 				m |= ModifierKeys.Command;
 			return m;
-		}
-
-		public static Gtk.Requisition ToGtkRequisition (this Size size)
-		{
-			var req = new Gtk.Requisition ();
-			req.Height = (int)size.Height;
-			req.Width = (int)size.Width;
-			return req;
 		}
 
 		public static Gtk.TreeViewGridLines ToGtkValue (this GridLines value)
@@ -216,305 +220,148 @@ namespace Xwt.GtkBackend
 			return Gtk.ResponseType.None;
 		}
 
-		public static Atk.Role ToAtkRole (this Accessibility.Role role)
+		public static Gtk.AccessibleRole ToGtkRole (this Accessibility.Role role)
 		{
 			switch (role) {
 			case Accessibility.Role.Button:
-				return Atk.Role.PushButton;
 			case Accessibility.Role.ButtonClose:
-				return Atk.Role.PushButton;
 			case Accessibility.Role.ButtonMinimize:
-				return Atk.Role.PushButton;
 			case Accessibility.Role.ButtonMaximize:
-				return Atk.Role.PushButton;
 			case Accessibility.Role.ButtonFullscreen:
-				return Atk.Role.PushButton;
-			case Accessibility.Role.Calendar:
-				return Atk.Role.Calendar;
-			case Accessibility.Role.Cell:
-				return Atk.Role.TableCell;
-			case Accessibility.Role.CheckBox:
-				return Atk.Role.CheckBox;
-			case Accessibility.Role.ColorChooser:
-				return Atk.Role.ColorChooser;
-			case Accessibility.Role.Column:
-				return Atk.Role.TableColumnHeader;
-			case Accessibility.Role.ComboBox:
-				return Atk.Role.ComboBox;
-			case Accessibility.Role.Custom:
-				return Atk.Role.Unknown;
-			case Accessibility.Role.Disclosure:
-				return Atk.Role.Arrow;
-			case Accessibility.Role.Filler:
-				return Atk.Role.Filler;
-			case Accessibility.Role.Group:
-				return Atk.Role.Panel;
-			case Accessibility.Role.Image:
-				return Atk.Role.Image;
-			case Accessibility.Role.Label:
-				return Atk.Role.Label;
-			case Accessibility.Role.LevelIndicator:
-				return (Atk.Role)101; // ATK_ROLE_LEVEL_BAR
-			case Accessibility.Role.Link:
-				return Atk.Role.Link;
-			case Accessibility.Role.List:
-				return Atk.Role.List;
-			case Accessibility.Role.Menu:
-				return Atk.Role.Menu;
-			case Accessibility.Role.MenuBar:
-				return Atk.Role.MenuBar;
-			case Accessibility.Role.MenuBarItem:
-				return Atk.Role.MenuItem; // no difference between item and bar item
 			case Accessibility.Role.MenuButton:
-				return Atk.Role.PushButton;
-			case Accessibility.Role.MenuItem:
-				return Atk.Role.MenuItem;
-			case Accessibility.Role.MenuItemCheckBox:
-				return Atk.Role.CheckMenuItem;
-			case Accessibility.Role.MenuItemRadio:
-				return Atk.Role.RadioMenuItem;
-			case Accessibility.Role.Notebook:
-				return Atk.Role.PageTabList;
-			case Accessibility.Role.NotebookTab:
-				return Atk.Role.PageTab;
+			case Accessibility.Role.Disclosure:
+				return Gtk.AccessibleRole.Button;
+			case Accessibility.Role.Calendar:
+				return Gtk.AccessibleRole.Grid;
+			case Accessibility.Role.Cell:
+				return Gtk.AccessibleRole.GridCell;
+			case Accessibility.Role.CheckBox:
+				return Gtk.AccessibleRole.Checkbox;
+			case Accessibility.Role.ColorChooser:
+			case Accessibility.Role.Custom:
+				return Gtk.AccessibleRole.Widget;
+			case Accessibility.Role.Column:
+				return Gtk.AccessibleRole.ColumnHeader;
+			case Accessibility.Role.ComboBox:
+				return Gtk.AccessibleRole.ComboBox;
+			case Accessibility.Role.Filler:
+				return Gtk.AccessibleRole.Generic;
+			case Accessibility.Role.Group:
 			case Accessibility.Role.Paned:
-				return Atk.Role.SplitPane;
-			case Accessibility.Role.PanedSplitter:
-				return (Atk.Role)int.MaxValue; // no matching role > Atk.Role.LastDefined
-			case Accessibility.Role.Popup:
-				return Atk.Role.PopupMenu;
-			case Accessibility.Role.ProgressBar:
-				return Atk.Role.ProgressBar;
-			case Accessibility.Role.RadioButton:
-				return Atk.Role.RadioButton;
-			case Accessibility.Role.RadioGroup:
-				return (Atk.Role)97; // ATK_ROLE_GROUPING
-			case Accessibility.Role.Row:
-				return Atk.Role.TableRowHeader;
-			case Accessibility.Role.ScrollBar:
-				return Atk.Role.ScrollBar;
 			case Accessibility.Role.ScrollView:
-				return Atk.Role.ScrollPane;
+				return Gtk.AccessibleRole.Group;
+			case Accessibility.Role.Image:
+				return Gtk.AccessibleRole.Img;
+			case Accessibility.Role.Label:
+				return Gtk.AccessibleRole.Label;
+			case Accessibility.Role.LevelIndicator:
+				return Gtk.AccessibleRole.Meter;
+			case Accessibility.Role.Link:
+				return Gtk.AccessibleRole.Link;
+			case Accessibility.Role.List:
+				return Gtk.AccessibleRole.List;
+			case Accessibility.Role.Menu:
+			case Accessibility.Role.Popup:
+				return Gtk.AccessibleRole.Menu;
+			case Accessibility.Role.MenuBar:
+				return Gtk.AccessibleRole.MenuBar;
+			case Accessibility.Role.MenuBarItem:
+			case Accessibility.Role.MenuItem:
+				return Gtk.AccessibleRole.MenuItem;
+			case Accessibility.Role.MenuItemCheckBox:
+				return Gtk.AccessibleRole.MenuItemCheckbox;
+			case Accessibility.Role.MenuItemRadio:
+				return Gtk.AccessibleRole.MenuItemRadio;
+			case Accessibility.Role.Notebook:
+				return Gtk.AccessibleRole.TabList;
+			case Accessibility.Role.NotebookTab:
+				return Gtk.AccessibleRole.Tab;
+			case Accessibility.Role.PanedSplitter:
 			case Accessibility.Role.Separator:
-				return Atk.Role.Separator;
+				return Gtk.AccessibleRole.Separator;
+			case Accessibility.Role.ProgressBar:
+				return Gtk.AccessibleRole.ProgressBar;
+			case Accessibility.Role.RadioButton:
+				return Gtk.AccessibleRole.Radio;
+			case Accessibility.Role.RadioGroup:
+				return Gtk.AccessibleRole.RadioGroup;
+			case Accessibility.Role.Row:
+				return Gtk.AccessibleRole.Row;
+			case Accessibility.Role.ScrollBar:
+				return Gtk.AccessibleRole.Scrollbar;
 			case Accessibility.Role.Slider:
-				return Atk.Role.Slider;
+				return Gtk.AccessibleRole.Slider;
 			case Accessibility.Role.SpinButton:
-				return Atk.Role.SpinButton;
+				return Gtk.AccessibleRole.SpinButton;
 			case Accessibility.Role.Table:
-				return Atk.Role.Table;
+				return Gtk.AccessibleRole.Table;
 			case Accessibility.Role.TextArea:
-				return Atk.Role.Text;
 			case Accessibility.Role.TextEntry:
-				return Atk.Role.Entry;
 			case Accessibility.Role.TextEntryPassword:
-				return Atk.Role.PasswordText;
+				return Gtk.AccessibleRole.TextBox;
 			case Accessibility.Role.TextEntrySearch:
-				return Atk.Role.Entry;
+				return Gtk.AccessibleRole.SearchBox;
 			case Accessibility.Role.ToggleButton:
-				return Atk.Role.ToggleButton;
+				return Gtk.AccessibleRole.ToggleButton;
 			case Accessibility.Role.ToolBar:
-				return Atk.Role.ToolBar;
+				return Gtk.AccessibleRole.Toolbar;
 			case Accessibility.Role.ToolTip:
-				return Atk.Role.ToolTip;
+				return Gtk.AccessibleRole.Tooltip;
 			case Accessibility.Role.Tree:
-				return Atk.Role.TreeTable;
+				return Gtk.AccessibleRole.TreeGrid;
 			case Accessibility.Role.None:
-				return (Atk.Role)int.MaxValue; // no matching role > Atk.Role.LastDefined
+				return Gtk.AccessibleRole.None;
 			default:
 				throw new ArgumentOutOfRangeException ();
 			}
 		}
 
-		public static Accessibility.Role ToXwtRole (this Atk.Role role)
+		public static Accessibility.Role ToXwtRole (this Gtk.AccessibleRole role)
 		{
 			switch (role) {
-			//case Atk.Role.Invalid:
-			//	break;
-			//case Atk.Role.AccelLabel:
-			//	break;
-			//case Atk.Role.Alert:
-			//	break;
-			//case Atk.Role.Animation:
-			//	break;
-			case Atk.Role.Arrow:
-				return Accessibility.Role.Disclosure;
-			case Atk.Role.Calendar:
-				return Accessibility.Role.Calendar;
-			//case Atk.Role.Canvas:
-			//	break;
-			case Atk.Role.CheckBox:
-				return Accessibility.Role.CheckBox;
-			case Atk.Role.CheckMenuItem:
-				return Accessibility.Role.MenuItemCheckBox;
-			case Atk.Role.ColorChooser:
-				return Accessibility.Role.ColorChooser;
-			case Atk.Role.ColumnHeader:
-				return Accessibility.Role.Column;
-			case Atk.Role.ComboBox:
-				return Accessibility.Role.ComboBox;
-			case Atk.Role.DateEditor:
-				return Accessibility.Role.Calendar;
-			//case Atk.Role.DesktopIcon:
-			//	break;
-			//case Atk.Role.DesktopFrame:
-			//	break;
-			//case Atk.Role.Dial:
-			//	break;
-			//case Atk.Role.Dialog:
-			//	break;
-			//case Atk.Role.DirectoryPane:
-			//	break;
-			//case Atk.Role.DrawingArea:
-			//	break;
-			//case Atk.Role.FileChooser:
-			//	break;
-			case Atk.Role.Filler:
-				return Accessibility.Role.Filler;
-			//case Atk.Role.FontChooser:
-			//	break;
-			//case Atk.Role.Frame:
-			//	break;
-			//case Atk.Role.GlassPane:
-			//	break;
-			//case Atk.Role.HtmlContainer:
-			//	break;
-			//case Atk.Role.Icon:
-			//	break;
-			case Atk.Role.Image:
-				return Accessibility.Role.Image;
-			//case Atk.Role.InternalFrame:
-			//	break;
-			case Atk.Role.Label:
-				return Accessibility.Role.Label;
-			//case Atk.Role.LayeredPane:
-			//	break;
-			case Atk.Role.List:
-				return Accessibility.Role.List;
-			case Atk.Role.ListItem:
-				return Accessibility.Role.Cell;
-			case Atk.Role.Menu:
-				return Accessibility.Role.Menu;
-			case Atk.Role.MenuBar:
-				return Accessibility.Role.MenuBar;
-			case Atk.Role.MenuItem:
-				return Accessibility.Role.MenuItem;
-			//case Atk.Role.OptionPane:
-			//	break;
-			case Atk.Role.PageTab:
-				return Accessibility.Role.NotebookTab;
-			case Atk.Role.PageTabList:
-				return Accessibility.Role.Notebook;
-			case Atk.Role.Panel:
-				return Accessibility.Role.Group;
-			case Atk.Role.PasswordText:
-				return Accessibility.Role.TextEntryPassword;
-			case Atk.Role.PopupMenu:
-				return Accessibility.Role.Popup;
-			case Atk.Role.ProgressBar:
-				return Accessibility.Role.ProgressBar;
-			case Atk.Role.PushButton:
-				return Accessibility.Role.Button;
-			case Atk.Role.RadioButton:
-				return Accessibility.Role.RadioButton;
-			case Atk.Role.RadioMenuItem:
-				return Accessibility.Role.MenuItemRadio;
-			//case Atk.Role.RootPane:
-			//	break;
-			case Atk.Role.RowHeader:
-				return Accessibility.Role.Row;
-			case Atk.Role.ScrollBar:
-				return Accessibility.Role.ScrollBar;
-			case Atk.Role.ScrollPane:
-				return Accessibility.Role.ScrollView;
-			case Atk.Role.Separator:
-				return Accessibility.Role.Separator;
-			case Atk.Role.Slider:
-				return Accessibility.Role.Slider;
-			case Atk.Role.SplitPane:
-				return Accessibility.Role.Paned;
-			case Atk.Role.SpinButton:
-				return Accessibility.Role.SpinButton;
-			//case Atk.Role.Statusbar:
-			//	break;
-			case Atk.Role.Table:
-				return Accessibility.Role.Table;
-			case Atk.Role.TableCell:
-				return Accessibility.Role.Cell;
-			case Atk.Role.TableColumnHeader:
-				return Accessibility.Role.Column;
-			case Atk.Role.TableRowHeader:
-				return Accessibility.Role.Row;
-			//case Atk.Role.TearOffMenuItem:
-			//	break;
-			//case Atk.Role.Terminal:
-			//	break;
-			case Atk.Role.Text:
-				return Accessibility.Role.TextArea;
-			case Atk.Role.ToggleButton:
-				return Accessibility.Role.ToggleButton;
-			case Atk.Role.ToolBar:
-				return Accessibility.Role.ToolBar;
-			case Atk.Role.ToolTip:
-				return Accessibility.Role.ToolTip;
-			case Atk.Role.Tree:
-				return Accessibility.Role.Table;
-			case Atk.Role.TreeTable:
-				return Accessibility.Role.Table;
-			case Atk.Role.Unknown:
-				return Accessibility.Role.Custom;
-			//case Atk.Role.Viewport:
-			//	break;
-			//case Atk.Role.Window:
-			//	break;
-			//case Atk.Role.Header:
-			//	break;
-			//case Atk.Role.Footer:
-			//	break;
-			//case Atk.Role.Paragraph:
-			//	break;
-			//case Atk.Role.Ruler:
-			//	break;
-			//case Atk.Role.Application:
-			//	break;
-			//case Atk.Role.Autocomplete:
-			//	break;
-			//case Atk.Role.Editbar:
-			//	break;
-			//case Atk.Role.Embedded:
-			//	break;
-			case Atk.Role.Entry:
-				return Accessibility.Role.TextEntry;
-			//case Atk.Role.Chart:
-			//	break;
-			//case Atk.Role.Caption:
-			//	break;
-			//case Atk.Role.DocumentFrame:
-			//	break;
-			//case Atk.Role.Heading:
-			//	break;
-			//case Atk.Role.Page:
-			//	break;
-			//case Atk.Role.Section:
-			//	break;
-			//case Atk.Role.RedundantObject:
-			//	break;
-			//case Atk.Role.Form:
-			//	break;
-			case Atk.Role.Link:
-				return Accessibility.Role.Link;
-			//case Atk.Role.InputMethodWindow:
-			//	break;
-			//case Atk.Role.LastDefined:
-			//	break;
-			case (Atk.Role)97: // ATK_ROLE_GROUPING
-				return Accessibility.Role.RadioGroup;
-			case (Atk.Role)101: // ATK_ROLE_LEVEL_BAR
-				return Accessibility.Role.LevelIndicator;
-			default:
-				return Accessibility.Role.None;
+			case Gtk.AccessibleRole.Button: return Accessibility.Role.Button;
+			case Gtk.AccessibleRole.Checkbox: return Accessibility.Role.CheckBox;
+			case Gtk.AccessibleRole.ColumnHeader: return Accessibility.Role.Column;
+			case Gtk.AccessibleRole.ComboBox: return Accessibility.Role.ComboBox;
+			case Gtk.AccessibleRole.Generic: return Accessibility.Role.Filler;
+			case Gtk.AccessibleRole.Group: return Accessibility.Role.Group;
+			case Gtk.AccessibleRole.GridCell:
+			case Gtk.AccessibleRole.Cell:
+			case Gtk.AccessibleRole.ListItem: return Accessibility.Role.Cell;
+			case Gtk.AccessibleRole.Img: return Accessibility.Role.Image;
+			case Gtk.AccessibleRole.Label: return Accessibility.Role.Label;
+			case Gtk.AccessibleRole.Link: return Accessibility.Role.Link;
+			case Gtk.AccessibleRole.List:
+			case Gtk.AccessibleRole.ListBox: return Accessibility.Role.List;
+			case Gtk.AccessibleRole.Menu: return Accessibility.Role.Menu;
+			case Gtk.AccessibleRole.MenuBar: return Accessibility.Role.MenuBar;
+			case Gtk.AccessibleRole.MenuItem: return Accessibility.Role.MenuItem;
+			case Gtk.AccessibleRole.MenuItemCheckbox: return Accessibility.Role.MenuItemCheckBox;
+			case Gtk.AccessibleRole.MenuItemRadio: return Accessibility.Role.MenuItemRadio;
+			case Gtk.AccessibleRole.Meter: return Accessibility.Role.LevelIndicator;
+			case Gtk.AccessibleRole.ProgressBar: return Accessibility.Role.ProgressBar;
+			case Gtk.AccessibleRole.Radio: return Accessibility.Role.RadioButton;
+			case Gtk.AccessibleRole.RadioGroup: return Accessibility.Role.RadioGroup;
+			case Gtk.AccessibleRole.Row:
+			case Gtk.AccessibleRole.RowHeader: return Accessibility.Role.Row;
+			case Gtk.AccessibleRole.Scrollbar: return Accessibility.Role.ScrollBar;
+			case Gtk.AccessibleRole.SearchBox: return Accessibility.Role.TextEntrySearch;
+			case Gtk.AccessibleRole.Separator: return Accessibility.Role.Separator;
+			case Gtk.AccessibleRole.Slider: return Accessibility.Role.Slider;
+			case Gtk.AccessibleRole.SpinButton: return Accessibility.Role.SpinButton;
+			case Gtk.AccessibleRole.Tab: return Accessibility.Role.NotebookTab;
+			case Gtk.AccessibleRole.TabList: return Accessibility.Role.Notebook;
+			case Gtk.AccessibleRole.Table:
+			case Gtk.AccessibleRole.Grid: return Accessibility.Role.Table;
+			case Gtk.AccessibleRole.TextBox: return Accessibility.Role.TextEntry;
+			case Gtk.AccessibleRole.ToggleButton: return Accessibility.Role.ToggleButton;
+			case Gtk.AccessibleRole.Toolbar: return Accessibility.Role.ToolBar;
+			case Gtk.AccessibleRole.Tooltip: return Accessibility.Role.ToolTip;
+			case Gtk.AccessibleRole.Tree:
+			case Gtk.AccessibleRole.TreeGrid: return Accessibility.Role.Tree;
+			case Gtk.AccessibleRole.Widget: return Accessibility.Role.Custom;
+			default: return Accessibility.Role.None;
 			}
 		}
 	}
 }
-
